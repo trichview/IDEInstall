@@ -1,7 +1,10 @@
 # IDEInstall
+
 An application to install components in Delphi/C++Builder IDE
-Requirements: modified version of Jcl: <https://github.com/trichview/jcl> (it's not necessary to install this version to Delphi IDE, just units must be available for the project).
-Website: <https://www.trichview.com/ideinstall/>
+
+*Requirements:* modified version of Jcl: <https://github.com/trichview/jcl>. It's not necessary to install this version to Delphi IDE, just units must be available for the project.
+
+*Website:* <https://www.trichview.com/ideinstall/>
 
 ## Description
 
