@@ -884,7 +884,7 @@ begin
         btnNext.Caption := 'Next >';
       end;
   end;
-  Label1.Width := Label1.Parent.Width - Image1.Left * 2;
+  Label1.Width := Label1.Parent.Width - Label1.Left - Image1.Left;
 end;
 
 const
@@ -990,6 +990,17 @@ procedure TfrmMain.FormCreate(Sender: TObject);
 var
   ErrorMsg, FileName: String;
 begin
+  if Screen.Fonts.IndexOf(Font.Name) < 0 then
+  begin
+    Font.Name := 'Tahoma';
+    Font.Size := 8;
+    panNoInstallers.Font.Name := 'Tahoma';
+    panNoInstallers.Font.Size := 8;
+    txtLog.Font.Name := 'Tahoma';
+    txtLog.Font.Size := 8;
+    Label1.Font.Name := 'Tahoma';
+    Label1.Font.Size := 11;
+  end;
   ShowStatusMsg('');
   {$IFDEF TASKBAR}
   try
@@ -3784,7 +3795,7 @@ begin
     btnOptions.Visible := False;
     Label1.Caption := Format('Installing %s in %s IDE',
       [Config.Product, Config.IDE]);
-    Label1.Width := Label1.Parent.Width - Image1.Left * 2;
+    Label1.Width := Label1.Parent.Width - Label1.Left - Image1.Left;
     btnNext.Visible := False;
     //btnExit.Visible := False;
     btnAbout.Visible := False;
@@ -3820,7 +3831,7 @@ begin
     btnOptions.Visible := False;
     Label1.Caption :=
       Format('Uninstalling %s from Delphi and C++Builder IDE', [Config.Product]);
-    Label1.Width := Label1.Parent.Width - Image1.Left * 2;
+    Label1.Width := Label1.Parent.Width - Label1.Left - Image1.Left;
     btnNext.Visible := False;
     btnExit.Visible := False;
     btnAbout.Visible := False;

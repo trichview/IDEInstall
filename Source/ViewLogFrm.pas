@@ -31,6 +31,7 @@ type
   TfrmLog = class(TForm)
     Button1: TButton;
     txt: TMemo;
+    procedure FormCreate(Sender: TObject);
   private
     { Private declarations }
   public
@@ -56,6 +57,17 @@ begin
     frm.ShowModal;
   finally
     frm.Free;
+  end;
+end;
+
+procedure TfrmLog.FormCreate(Sender: TObject);
+begin
+  if Screen.Fonts.IndexOf(Font.Name) < 0 then
+  begin
+    Font.Name := 'Tahoma';
+    Font.Size := 8;
+    txt.Font.Name := 'Tahoma';
+    txt.Font.Size := 8;
   end;
 end;
 

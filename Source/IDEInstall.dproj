@@ -97,14 +97,14 @@
         <DCC_MapFile>3</DCC_MapFile>
         <DCC_LocalDebugSymbols>true</DCC_LocalDebugSymbols>
         <DCC_DebugInformation>2</DCC_DebugInformation>
-        <VerInfo_Build>49</VerInfo_Build>
         <VerInfo_MajorVer>2</VerInfo_MajorVer>
-        <VerInfo_MinorVer>2</VerInfo_MinorVer>
+        <VerInfo_MinorVer>3</VerInfo_MinorVer>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Keys>CompanyName=Sergei Vladimirovich Tkachenko IP;FileDescription=Delphi and C++Builder IDE Installer;FileVersion=2.2.0.49;InternalName=IDEInstall;LegalCopyright=(c) 2015 Sergey Tkachenko;LegalTrademarks=;OriginalFilename=IDEInstall.exe;ProductName=IDEInstall;ProductVersion=1.0.0.0;Comments=;ProgramID=com.embarcadero.$(MSBuildProjectName)</VerInfo_Keys>
+        <VerInfo_Keys>CompanyName=Sergei Vladimirovich Tkachenko IP;FileDescription=Delphi and C++Builder IDE Installer;FileVersion=2.3.0.4;InternalName=IDEInstall;LegalCopyright=(c) 2015 Sergey Tkachenko;LegalTrademarks=;OriginalFilename=IDEInstall.exe;ProductName=IDEInstall;ProductVersion=1.0.0.0;Comments=;ProgramID=com.embarcadero.$(MSBuildProjectName)</VerInfo_Keys>
         <VerInfo_Locale>1033</VerInfo_Locale>
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <BT_BuildType>Debug</BT_BuildType>
+        <VerInfo_Build>4</VerInfo_Build>
         <AppDPIAwarenessMode>none</AppDPIAwarenessMode>
     </PropertyGroup>
     <ItemGroup>

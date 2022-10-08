@@ -8,13 +8,12 @@ object frmOptions: TfrmOptions
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
-  Font.Height = -11
-  Font.Name = 'Tahoma'
+  Font.Height = -12
+  Font.Name = 'Segoe UI'
   Font.Style = []
-  OldCreateOrder = False
   Position = poMainFormCenter
-  PixelsPerInch = 96
-  TextHeight = 13
+  OnCreate = FormCreate
+  TextHeight = 15
   object btnOk: TButton
     Left = 138
     Top = 172
@@ -45,8 +44,8 @@ object frmOptions: TfrmOptions
     object Label1: TLabel
       Left = 8
       Top = 80
-      Width = 198
-      Height = 13
+      Width = 224
+      Height = 15
       Caption = 'All other platforms use pre-compiled units'
     end
     object rgPAS: TRadioButton

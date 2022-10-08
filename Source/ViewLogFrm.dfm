@@ -7,16 +7,15 @@ object frmLog: TfrmLog
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
-  Font.Height = -11
-  Font.Name = 'Tahoma'
+  Font.Height = -12
+  Font.Name = 'Segoe UI'
   Font.Style = []
-  OldCreateOrder = False
   Position = poMainFormCenter
+  OnCreate = FormCreate
   DesignSize = (
     527
     336)
-  PixelsPerInch = 96
-  TextHeight = 13
+  TextHeight = 15
   object Button1: TButton
     Left = 444
     Top = 303
@@ -38,8 +37,8 @@ object frmLog: TfrmLog
     Color = clInfoBk
     Font.Charset = DEFAULT_CHARSET
     Font.Color = clInfoText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
+    Font.Height = -12
+    Font.Name = 'Segoe UI'
     Font.Style = []
     Lines.Strings = (
       'txt')
