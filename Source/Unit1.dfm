@@ -22,7 +22,7 @@ object frmMain: TfrmMain
     413)
   TextHeight = 15
   object btnExit: TButton
-    Left = 473
+    Left = 465
     Top = 380
     Width = 75
     Height = 25
@@ -32,7 +32,7 @@ object frmMain: TfrmMain
     OnClick = btnExitClick
   end
   object btnNext: TButton
-    Left = 392
+    Left = 384
     Top = 380
     Width = 75
     Height = 25
@@ -125,7 +125,7 @@ object frmMain: TfrmMain
       object clstIDE: TCheckListBox
         Left = 16
         Top = 88
-        Width = 516
+        Width = 508
         Height = 253
         Anchors = [akLeft, akTop, akRight, akBottom]
         ItemHeight = 15
@@ -197,7 +197,7 @@ object frmMain: TfrmMain
       object txtLog: TMemo
         Left = 16
         Top = 88
-        Width = 516
+        Width = 508
         Height = 214
         Anchors = [akLeft, akTop, akRight, akBottom]
         Color = clInfoBk
@@ -216,7 +216,7 @@ object frmMain: TfrmMain
       object ProgressBar1: TProgressBar
         Left = 16
         Top = 329
-        Width = 516
+        Width = 508
         Height = 17
         Anchors = [akLeft, akRight, akBottom]
         TabOrder = 1
@@ -233,12 +233,13 @@ object frmMain: TfrmMain
       object lblUninstall: TLabel
         Left = 16
         Top = 88
-        Width = 516
+        Width = 508
         Height = 253
         Anchors = [akLeft, akTop, akRight, akBottom]
         AutoSize = False
         Caption = 'This program uninstalls %s from all Delphi and C++Builder IDEs'
         WordWrap = True
+        ExplicitWidth = 516
       end
     end
     object tabChoose: TTabSheet

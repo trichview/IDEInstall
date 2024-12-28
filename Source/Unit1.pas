@@ -26,6 +26,8 @@ interface
 {$DEFINE TASKBAR}
 {.$DEFINE LOGPKGREPLACE}
 
+{.$DEFINE TESTCOMMUNITYEDITION}
+
 uses
   AnsiStrings, Windows, Messages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, ExtCtrls, StdCtrls, CheckLst,
@@ -46,27 +48,32 @@ const
   WM_PROCEED = WM_USER + 1;
 
 type
+  TInstallPlatform = (ipWin32, ipWin64, ipWin64x, ipOSX64, ipOSXArm64,
+    ipAndroid32, ipAndroid64, ipLinux64, ipIOS64, ipIOSSimArm64);
+  TInstallPlatforms = set of TInstallPlatform;
+
 
   TInstallItem = class
   public
     Target:       TJclBorRADToolInstallation;
     Personality:  TJclBorPersonality;
     Name:         String;
-    Dual, Dual64, OSX64, OSXArm64, Android32, Android64: Boolean;
+    Dual, Dual64: Boolean;
+    InstallPlatforms: TInstallPlatforms;
     constructor Create(ATarget: TJclBorRADToolInstallation;
-      APersonality: TJclBorPersonality; ADual, ADual64, FullName,
-      AOSX64, AOSXArm64, AAndroid32, AAndroid64: Boolean);
+      APersonality: TJclBorPersonality; ADual, ADual64, FullName: Boolean;
+      AInstallPlatforms: TInstallPlatforms);
   end;
 
   TInstallMode = (imUninstall, imInstall, imChoose);
   TByteSet = set of Byte;
 
   TInstallConfig = record
-    CBuilder, Win64, OSX64, OSXArm64, Android32, Android64,
-    CheckAll, QuickMode, UninstallUnchecked: Boolean;
-    BCBVer, DelphiVer, BDSVer, BDSDualVer, BDS64Ver, BDS64DualVer,
+    CBuilder, CheckAll, QuickMode, UninstallUnchecked: Boolean;
+    BCBVer, DelphiVer, BDSVer, BDSDualVer, BDSWin64Ver, BDSWin64xVer, BDS64DualVer,
     BDSCBuilderVer, BDSCBuilder64Ver, BDSOSX64Ver, BDSOSXArm64Ver,
-    BDSAndroid32Ver, BDSAndroid64Ver: TByteSet;
+    BDSAndroid32Ver, BDSAndroid64Ver, BDSLinux64Ver, BDSiOS64Ver, BDSiOSSimArm64Ver: TByteSet;
+    InstallPlatforms: TInstallPlatforms;
     InstallMode: TInstallMode;
     Product, IDE: String;
     SourcePath, SourcePathEnv, SourcePathVar: String;
@@ -74,6 +81,9 @@ type
     Scheme: Integer;
     NoCompile: Boolean;
     function GetBDSVersForPersonality(APersonality: TJclBorPersonality): TByteSet;
+    function GetBDSVersForInstallPlatform(AIP: TInstallPlatform): TByteSet;
+    function GetInstallPlatforms(Target: TJclBorRADToolInstallation): TInstallPlatforms;
+    function CanInstallIn(ATarget: TJclBorRADToolInstallation; AIP: TInstallPlatform): Boolean;
   end;
 
   TfrmMain = class(TForm)
@@ -128,11 +138,11 @@ type
     FPackages, FDepPackages, FCheckUnits, FHelpFiles, FRequirePaths, FCheckIncs: TStringList;
     FPaths, FDescr, FTitles: TStringList;
     FReplacements: TReplaceCollection;
-    IsTrial, IsOptional, Is32bit, IsRunTime, IsOSX64, IsOSXArm64,
-    IsAndroid32, IsAndroid64: array of Boolean;
+    IsTrial, IsOptional, Is32bit, IsRunTime, NoCE: array of Boolean;
+    PkgInstallPlatforms: array of TInstallPlatforms;
     HasTrial: Boolean;
     FPathToSrcWin32, FIgnoreNonWinErrors, FIgnoreOptionalErrors: Boolean;
-    Activated, Aborted: Boolean;
+    Activated, Aborted, CEDetected, CEFailed: Boolean;
 
     procedure CheckAll(Checked: Boolean);
     function IsIDEChosen: Boolean;
@@ -141,8 +151,8 @@ type
     function InstallPackage(const PackageFileNameRun, PackageFileNameDsgn,
       Descr, IncludePath: string;
       Target: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
-      Dual, Trial, Optional, RuntimeOnly: Boolean): Boolean;
-    function CopyPackageLibs(const PackageFileName: string;
+      Dual, Trial, Optional, RuntimeOnly, NoCE: Boolean): Boolean;
+    function CopyPackageLibsCB(const PackageFileName: string;
       Target: TJclBorRADToolInstallation): Boolean;
     function CopyToUnitOutputPath(const PackageFileName: string;
       Target: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
@@ -174,7 +184,7 @@ type
     function CompileRuntime(const PackageFileName, Descr, IncludePath: string;
       Target: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
       APlatform: TJclBDSPlatform;
-      Dual, Trial, Optional: Boolean): Boolean;
+      Dual, Trial, Optional, NoCE: Boolean): Boolean;
 
     function AdjustPathToUnitsInPackage(const PackageFileName: string;
       Target: TJclBorRADToolInstallation; APersonality: TJclBorPersonality): Boolean;
@@ -192,8 +202,8 @@ type
     procedure GetListOfPathToDelete(const Paths: String;
       PathsToDelete: TStringList; const CheckUnit, CheckInc: String;
       Target: TJclBorRADToolInstallation);
-    procedure DeletePathsToOldVersions(Target: TJclBorRADToolInstallation;
-      CheckUnit, CheckInc: String);
+    function DeletePathsToOldVersions(Target: TJclBorRADToolInstallation;
+      CheckUnit, CheckInc: String): Boolean;
     procedure InitProgress(MaxValue: Integer);
     procedure StepProgress;
     procedure DoneProgress(Success: Boolean);
@@ -206,6 +216,8 @@ type
     procedure SaveOptions;
     procedure LoadOptions;
     procedure MoveControlsToActivePage;
+    function CopyPackageLibsD(const PackageFileName: string;
+      Target: TJclBorRADToolInstallation; APlatform: TJclBDSPlatform): Boolean;
   public
     { Public declarations }
     Installing:             Boolean;
@@ -240,16 +252,24 @@ uses
   ViewLogFrm, OptionsFrm;
 
 const
-  AllBDSVer           = [3 .. 12, 14 .. 22];
-  HelpBDSVer          = [16 .. 22];
-  AllBDS64Ver         = [9 .. 12, 14 .. 22];
-  AllBDSCBuilder64Ver = [10 .. 12, 14 .. 22];
-  AllBDSOSX64Ver      = [20 .. 22];
-  AllBDSOSXArm64Ver   = [22];
-  AllBDSAndroid32Ver  = [21 .. 22];
-  AllBDSAndroid64Ver  = [21 .. 22];
+  AllBDSVer           = [3 .. 12, 14 .. 23];
+  HelpBDSVer          = [16 .. 23];
+  AllBDSWin64Ver      = [9 .. 12, 14 .. 23];
+  AllBDSCBuilderWin64Ver = [10 .. 12, 14 .. 23];
+  AllBDSOSX64Ver      = [20 .. 23];
+  AllBDSOSXArm64Ver   = [22 .. 23];
+  AllBDSAndroid32Ver  = [21 .. 23];
+  AllBDSAndroid64Ver  = [21 .. 23];
+  AllBDSLinux64Ver    = [20 .. 23];
+  AllBDSIOS64Ver      = [21 .. 23];
+  AllBDSIOSSimArm64Ver = [22 .. 23];
+  AllBDSWin64xVer =     [23];
   AllBDSCompleteCBuilder64Ver = [];
+
+  BDSCommunityEditionVer = 23;
   TextSeparatorLine   = #13#10'-------------------------------------'#13#10;
+
+  FirstNonWinInstallPlatform = ipWin64x; // counting Winx platform as "non-Windows"
 
 const
   LogErrorFmtStr = #13#10 + TextSeparatorLine + 'Error compiling %s:'#13 + #10;
@@ -400,58 +420,175 @@ end;
 function GetPlatformName(APlatform: TJclBDSPlatform): String;
 begin
   case APlatform of
-    bpWin32: Result := '32-bit Windows';
-    bpWin64: Result := '64-bit Windows';
-    bpOSX32: Result := '32-bit MacOS';
-    bpOSX64: Result := '64-bit MacOS';
-    bpOSXArm64: Result := '64-bit ARM MacOS';
-    bpAndroid32: Result := '32-bit Android';
-    bpAndroid64: Result := '64-bit Android';
-    else     Result := '?';
+    bpWin32:          Result := '32-bit Windows';
+    bpWin64:          Result := '64-bit Windows';
+    bpWin64x:         Result := '64-bit Windows (Modern)';
+    bpOSX32:          Result := '32-bit MacOS';
+    bpOSX64:          Result := '64-bit MacOS';
+    bpOSXArm64:       Result := '64-bit ARM MacOS';
+    bpAndroid32:      Result := '32-bit Android';
+    bpAndroid64:      Result := '64-bit Android';
+    bpLinux64:        Result := '64-bit Linux';
+    bpiOSDevice32:    Result := '32-bit iOS';
+    bpiOSDevice64:    Result := '64-bit iOS';
+    bpiOSSimulatorArm64: Result := '64-bit ARM iOS Simulator';
+    else              Result := '?';
   end;
 end;
 {------------------------------------------------------------------------------}
 function GetDCC(Target: TJclBDSInstallation; APlatform: TJclBDSPlatform): TJclDCC32;
 begin
   case APlatform of
-    bpWin32:    Result := Target.DCC32;
-    bpWin64:    Result := Target.DCC64;
-    bpOSX32:    Result := Target.DCCOSX32;
-    bpOSX64:    Result := Target.DCCOSX64;
-    bpOSXArm64: Result := Target.DCCOSXArm64;
-    bpAndroid32: Result := Target.DCCArm32;
-    bpAndroid64: Result := Target.DCCArm64;
-    else        Result := nil;
+    bpWin32:          Result := Target.DCC32;
+    bpWin64:          Result := Target.DCC64;
+    bpWin64x:         Result := Target.DCC64x;
+    bpOSX32:          Result := Target.DCCOSX32;
+    bpOSX64:          Result := Target.DCCOSX64;
+    bpOSXArm64:       Result := Target.DCCOSXArm64;
+    bpAndroid32:      Result := Target.DCCArm32;
+    bpAndroid64:      Result := Target.DCCArm64;
+    bpLinux64:        Result := Target.DCCLinux64;
+    bpiOSDevice32:    Result := Target.DCCiOS32;
+    bpiOSDevice64:    Result := Target.DCCiOS64;
+    bpiOSSimulatorArm64: Result := Target.DCCiOSSimulatorArm64;
+    else              Result := nil;
   end;
 end;
-
+{------------------------------------------------------------------------------}
+function GetPlatformForInstallPlatform(AIP: TInstallPlatform): TJclBDSPlatform;
+begin
+  case AIP of
+    ipWin64:     Result := bpWin64;
+    ipWin64x:    Result := bpWin64x;
+    ipOSX64:     Result := bpOSX64;
+    ipOSXArm64:  Result := bpOSXArm64;
+    ipAndroid32: Result := bpAndroid32;
+    ipAndroid64: Result := bpAndroid64;
+    ipLinux64:   Result := bpLinux64;
+    //ipIOS32:   Result := bpiOSDevice32;
+    ipIOS64:     Result := bpiOSDevice64;
+    ipIOSSimARM64: Result := bpiOSSimulatorArm64;
+    else // ipWin32:
+                 Result := bpWin32;
+  end;
+end;
+{------------------------------------------------------------------------------}
+function GetPersonalitiesForInstallPlatform(AIP: TInstallPlatform): TJclBorPersonalities;
+begin
+  case AIP of
+    ipWin32:     Result := [bpDelphi32, bpBCBuilder32];
+    ipWin64:     Result := [bpDelphi64, bpBCBuilder64];
+    ipWin64x:    Result := [bpDelphi64x];
+    ipOSX64:     Result := [bpDelphiOSX64];
+    ipOSXArm64:  Result := [bpDelphiOSXArm64];
+    ipAndroid32: Result := [bpDelphiAndroid32];
+    ipAndroid64: Result := [bpDelphiAndroid64];
+    ipLinux64:   Result := [bpDelphiLinux64];
+    //ipIOS32:   Result := [bpDelphiiOSDevice32];
+    ipIOS64:     Result := [bpDelphiiOSDevice64];
+    ipIOSSimARM64: Result := [bpDelphiiOSSimulatorArm64];
+    else         Result := [];
+  end;
+end;
+{------------------------------------------------------------------------------}
+function GetDelphiPersonalityForInstallPlatform(AIP: TInstallPlatform): TJclBorPersonality;
+begin
+  case AIP of
+    ipWin64:     Result := bpDelphi64;
+    ipWin64x:    Result := bpDelphi64x;
+    ipOSX64:     Result := bpDelphiOSX64;
+    ipOSXArm64:  Result := bpDelphiOSXArm64;
+    ipAndroid32: Result := bpDelphiAndroid32;
+    ipAndroid64: Result := bpDelphiAndroid64;
+    ipLinux64:   Result := bpDelphiLinux64;
+    //ipIOS32:   Result := bpDelphiiOSDevice32;
+    ipIOS64:     Result := bpDelphiiOSDevice64;
+    ipIOSSimArm64:  Result := bpDelphiiOSSimulatorArm64;
+    else // ipWin32:
+                 Result := bpDelphi32;
+  end;
+end;
+{------------------------------------------------------------------------------}
+function CanInstallInTarget(AIP: TInstallPlatform; ATarget: TJclBorRADToolInstallation): Boolean;
+begin
+  Result := GetPersonalitiesForInstallPlatform(AIP) * ATarget.Personalities <> [];
+end;
+{------------------------------------------------------------------------------}
 function TInstallConfig.GetBDSVersForPersonality(APersonality: TJclBorPersonality): TByteSet;
 begin
   case APersonality of
-    bpDelphi32: Result := BDSVer;
-    bpDelphi64: Result := BDS64Ver;
-    bpDelphiOSX64: Result := BDSOSX64Ver;
-    bpDelphiOSXArm64: Result := BDSOSXArm64Ver;
-    bpDelphiAndroid32: Result := BDSAndroid32Ver;
-    bpDelphiAndroid64: Result := BDSAndroid64Ver;
-    else Result := [];
+    bpDelphi32:             Result := BDSVer;
+    bpDelphi64:             Result := BDSWin64Ver;
+    bpDelphi64x:            Result := BDSWin64xVer;
+    bpDelphiOSX64:          Result := BDSOSX64Ver;
+    bpDelphiOSXArm64:       Result := BDSOSXArm64Ver;
+    bpDelphiAndroid32:      Result := BDSAndroid32Ver;
+    bpDelphiAndroid64:      Result := BDSAndroid64Ver;
+    bpDelphiLinux64:        Result := BDSLinux64Ver;
+    bpDelphiiOSDevice32:    Result := []; // unsupported
+    bpDelphiiOSDevice64:    Result := BDSIOS64Ver;
+    bpDelphiiOSSimulatorArm64: Result := BDSIOSSimArm64Ver;
+    else                    Result := [];
   end;
-
 end;
-
+{------------------------------------------------------------------------------}
+function TInstallConfig.GetBDSVersForInstallPlatform(AIP: TInstallPlatform): TByteSet;
+begin
+  case AIP of
+    ipWin32:     Result := BDSVer;
+    ipWin64:     Result := BDSWin64Ver;
+    ipWin64x:    Result := BDSWin64xVer;
+    ipOSX64:     Result := BDSOSX64Ver;
+    ipOSXArm64:  Result := BDSOSXArm64Ver;
+    ipAndroid32: Result := BDSAndroid32Ver;
+    ipAndroid64: Result := BDSAndroid64Ver;
+    ipLinux64:   Result := BDSLinux64Ver;
+    //ipIOS32:   Result := []; // unsupported
+    ipIOS64:     Result := BDSIOS64Ver;
+    ipIOSSimArm64:  Result := BDSIOSSimArm64Ver;
+    else         Result := [];
+  end;
+end;
+{------------------------------------------------------------------------------}
+// Does not include Win32 and Win64
+function TInstallConfig.GetInstallPlatforms(Target: TJclBorRADToolInstallation): TInstallPlatforms;
+begin
+  Result := [];
+  if (bpDelphi64x in Target.Personalities) and (Target.VersionNumber in BDSWin64xVer) then
+    Include(Result, ipWin64x);
+  if (bpDelphiOSX64 in Target.Personalities) and (Target.VersionNumber in BDSOSX64Ver) then
+    Include(Result, ipOSX64);
+  if (bpDelphiOSXArm64 in Target.Personalities) and (Target.VersionNumber in BDSOSXArm64Ver) then
+    Include(Result, ipOSXArm64);
+  if (bpDelphiAndroid32 in Target.Personalities) and (Target.VersionNumber in BDSAndroid32Ver) then
+    Include(Result, ipAndroid32);
+  if (bpDelphiAndroid64 in Target.Personalities) and (Target.VersionNumber in BDSAndroid64Ver) then
+    Include(Result, ipAndroid64);
+  if (bpDelphiLinux64 in Target.Personalities) and (Target.VersionNumber in BDSLinux64Ver) then
+    Include(Result, ipLinux64);
+  // iOS32 skipped
+  if (bpDelphiiOSDevice64 in Target.Personalities) and (Target.VersionNumber in AllBDSIOS64Ver) then
+    Include(Result, ipIOS64);
+  if (bpDelphiiOSSimulatorArm64 in Target.Personalities) and (Target.VersionNumber in AllBDSIOSSimArm64Ver) then
+    Include(Result, ipIOSSimArm64);
+end;
+{------------------------------------------------------------------------------}
+function TInstallConfig.CanInstallIn(ATarget: TJclBorRADToolInstallation; AIP: TInstallPlatform): Boolean;
+begin
+  Result := CanInstallInTarget(AIP, ATarget) and (AIP in InstallPlatforms) and
+    (ATarget.VersionNumber in GetBDSVersForInstallPlatform(AIP));
+end;
+{------------------------------------------------------------------------------}
 constructor TInstallItem.Create(ATarget: TJclBorRADToolInstallation;
-  APersonality: TJclBorPersonality; ADual, ADual64, FullName, AOSX64, AOSXArm64,
-  AAndroid32, AAndroid64: Boolean);
+  APersonality: TJclBorPersonality; ADual, ADual64, FullName: Boolean;
+  AInstallPlatforms: TInstallPlatforms);
 begin
   inherited Create;
   Target := ATarget;
   Personality := APersonality;
   Dual := ADual;
   Dual64 := ADual64;
-  OSX64 := AOSX64;
-  OSXArm64 := AOSXArm64;
-  Android32 := AAndroid32;
-  Android64 := AAndroid64;
+  InstallPlatforms := AInstallPlatforms + [ipWin32, ipWin64];
 
   Name := Target.Name;
   if FullName then
@@ -537,22 +674,37 @@ begin
           else
             Result := 'CB10_2';
         20:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64] then
+          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64, bpDelphiLinux64] then
             Result := '10_3'
           else
             Result := 'CB10_3';
         21:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64,
-            bpDelphiAndroid32, bpDelphiAndroid64] then
+          if Personality in [bpDelphi32, bpDelphi64,
+            bpDelphiOSX64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64] then
             Result := '10_4'
           else
             Result := 'CB10_4';
         22:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64, bpDelphiOSXArm64,
-            bpDelphiAndroid32, bpDelphiAndroid64] then
+          if Personality in [bpDelphi32, bpDelphi64,
+            bpDelphiOSX64, bpDelphiOSXArm64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64, bpDelphiiOSSimulatorArm64] then
             Result := '11'
           else
             Result := 'CB11';
+        23:
+          if Personality in [bpDelphi32, bpDelphi64, bpDelphi64x,
+            bpDelphiOSX64, bpDelphiOSXArm64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64, bpDelphiiOSSimulatorArm64] then
+            Result := '12'
+          else
+            Result := 'CB12';
       end;
   end;
   Result := PathAddSeparator(RootPath + Result);
@@ -645,22 +797,37 @@ begin
           else
             Result := 'CB10_2' + PkgSuffix + '.cbproj';
         20:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64] then
+          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64, bpDelphiLinux64] then
             Result := 'D10_3' + PkgSuffix + '.dpk'
           else
             Result := 'CB10_3' + PkgSuffix + '.cbproj';
         21:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64,
-            bpDelphiAndroid32, bpDelphiAndroid64] then
+          if Personality in [bpDelphi32, bpDelphi64,
+            bpDelphiOSX64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64] then
             Result := 'D10_4' + PkgSuffix + '.dpk'
           else
             Result := 'CB10_4' + PkgSuffix + '.cbproj';
         22:
-          if Personality in [bpDelphi32, bpDelphi64, bpDelphiOSX64, bpDelphiOSXArm64,
-            bpDelphiAndroid32, bpDelphiAndroid64] then
+          if Personality in [bpDelphi32, bpDelphi64,
+            bpDelphiOSX64, bpDelphiOSXArm64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64, bpDelphiiOSSimulatorArm64] then
             Result := 'D11' + PkgSuffix + '.dpk'
           else
             Result := 'CB11' + PkgSuffix + '.cbproj';
+        23:
+          if Personality in [bpDelphi32, bpDelphi64, bpDelphi64x,
+            bpDelphiOSX64, bpDelphiOSXArm64,
+            bpDelphiAndroid32, bpDelphiAndroid64,
+            bpDelphiLinux64,
+            bpDelphiiOSDevice64, bpDelphiiOSSimulatorArm64] then
+            Result := 'D12' + PkgSuffix + '.dpk'
+          else
+            Result := 'CB12' + PkgSuffix + '.cbproj';
       end;
   end;
   Result := GetUnitPath(PathAddSeparator(RootPath), Inst, Personality, Trial) +
@@ -672,11 +839,16 @@ begin
   case APersonality of
     bpDelphi32, bpBCBuilder32: Result := '32';
     bpDelphi64, bpBCBuilder64: Result := '64';
+    bpDelphi64x:               Result := '64x';
     bpDelphiOSX32:             Result := 'OSX32';
     bpDelphiOSX64:             Result := 'OSX64';
     bpDelphiOSXArm64:          Result := 'OSXArm64';
     bpDelphiAndroid32:         Result := 'Android32';
     bpDelphiAndroid64:         Result := 'Android64';
+    bpDelphiLinux64:           Result := 'Linux64';
+    bpDelphiiOSDevice32:       Result := '?';
+    bpDelphiiOSDevice64:       Result := 'iOSDevice64';
+    bpDelphiiOSSimulatorArm64: Result := 'iOSSimARM64';
     else                       Result := '?';
   end;
 end;
@@ -735,6 +907,8 @@ begin
           Result := '10_4';
         22:
           Result := '11';
+        23:
+          Result := '12';
       end;
   end;
   Folder := GetCBuilderOutputPath(Personality);
@@ -796,6 +970,8 @@ begin
           Result := '10_4';
         22:
           Result := '11';
+        23:
+          Result := '12';
       end;
   end;
   Folder := GetDelphiOutputPath(Personality);
@@ -906,7 +1082,7 @@ begin
       if AValue <> '' then
         Reg.WriteExpandString(AName, AValue)
       else
-        Reg.DeleteKey(AName);
+        Reg.DeleteValue(AName);
       SendMessageTimeout (HWND_BROADCAST, WM_SETTINGCHANGE, 0, LParam(PChar(Setting)),
         SMTO_ABORTIFHUNG, 5000, @Res);
       Result := True;
@@ -1053,14 +1229,14 @@ begin
         if Target.VersionNumber in Config.DelphiVer then
         begin
           InstallItem := TInstallItem.Create(Target, bpDelphi32, False,
-            False, False, False, False, False, False);
+            False, False, []);
           clstIDE.AddItem(InstallItem.Name, InstallItem);
         end;
       brCppBuilder:
         if Target.VersionNumber in Config.BCBVer then
         begin
           InstallItem := TInstallItem.Create(Target, bpBCBuilder32, False,
-            False, False, False, False, False, False);
+            False, False, []);
           clstIDE.AddItem(InstallItem.Name, InstallItem);
         end;
       brBorlandDevStudio:
@@ -1072,19 +1248,14 @@ begin
             InstallItem := TInstallItem.Create(Target, bpDelphi32,
               (bpBCBuilder32 in Target.Personalities) and (Target.VersionNumber in Config.BDSDualVer),
               (bpBCBuilder64 in Target.Personalities) and (Target.VersionNumber in Config.BDS64DualVer),
-              True,
-              (bpDelphiOSX64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSX64Ver),
-              (bpDelphiOSXArm64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSXArm64Ver),
-              (bpDelphiAndroid32 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid32Ver),
-              (bpDelphiAndroid64 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid64Ver)
-              );
+              True, Config.GetInstallPlatforms(Target));
             clstIDE.AddItem(InstallItem.Name, InstallItem);
           end;
           if Config.CBuilder and (bpBCBuilder32 in Target.Personalities) and
             (Target.VersionNumber in Config.BDSVer) then
           begin
             InstallItem := TInstallItem.Create(Target, bpBCBuilder32, False,
-              False, True, False, False, False, False);
+              False, True, []);
             clstIDE.AddItem(InstallItem.Name, InstallItem);
           end;
         end;
@@ -1286,8 +1457,8 @@ begin
   end;
 end;
 
-procedure TfrmMain.DeletePathsToOldVersions(Target: TJclBorRADToolInstallation;
-  CheckUnit, CheckInc: String);
+function TfrmMain.DeletePathsToOldVersions(Target: TJclBorRADToolInstallation;
+  CheckUnit, CheckInc: String): Boolean;
 var
   PathsToDelete: TStringList;
   Log:           String;
@@ -1310,12 +1481,13 @@ var
       Log := Log + #13#10 + PathsToDelete.Strings[i];
   end;
 
-  procedure CleanLibrarySearchPath(APlatform: TJclBDSPlatform);
+  function CleanLibrarySearchPath(APlatform: TJclBDSPlatform): Boolean;
   var
     i: Integer;
   begin
     GetListOfPathToDelete(Target.LibrarySearchPath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := PathsToDelete.Count > 0;
     if PathCollection <> nil then
       for i := 0 to PathsToDelete.Count - 1 do
         PathCollection.AddLibrarySearchPath(PathsToDelete.Strings[i], BDSTarget, APlatform)
@@ -1325,6 +1497,7 @@ var
     AddLog('Library', APlatform);
     GetListOfPathToDelete(Target.LibraryBrowsingPath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := Result or (PathsToDelete.Count > 0);
     if PathCollection <> nil then
       for i := 0 to PathsToDelete.Count - 1 do
        PathCollection.AddLibraryBrowsingPath(PathsToDelete.Strings[i], BDSTarget, APlatform)
@@ -1334,16 +1507,18 @@ var
     AddLog('Browsing', APlatform);
   end;
 
-  procedure CleanCBuilderPath(APlatform: TJclBDSPlatform);
+  function CleanCBuilderPath(APlatform: TJclBDSPlatform): Boolean;
   var
     i:       Integer;
     LTarget: TJclBDSInstallation;
   begin
+    Result := False;
     if not(Target is TJclBDSInstallation) then
       exit;
     LTarget := TJclBDSInstallation(Target);
     GetListOfPathToDelete(LTarget.CppLibraryPath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := PathsToDelete.Count > 0;
     if PathCollection <> nil then
       for i := 0 to PathsToDelete.Count - 1 do
         PathCollection.AddCppLibraryPath(PathsToDelete.Strings[i], LTarget, APlatform)
@@ -1356,6 +1531,7 @@ var
     begin
       GetListOfPathToDelete(LTarget.CppLibraryPath_Clang32, PathsToDelete,
         CheckUnit, CheckInc, Target);
+      Result := Result or (PathsToDelete.Count > 0);
       for i := 0 to PathsToDelete.Count - 1 do
         LTarget.RemoveFromCppLibraryPath_Clang32(PathsToDelete.Strings[i]);
       AddLog('C++ library for new compiler', APlatform);
@@ -1363,6 +1539,7 @@ var
 
     GetListOfPathToDelete(LTarget.CppBrowsingPath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := Result or (PathsToDelete.Count > 0);
     if PathCollection <> nil then
       for i := 0 to PathsToDelete.Count - 1 do
         PathCollection.AddCppBrowsingPath(PathsToDelete.Strings[i], LTarget, APlatform)
@@ -1373,6 +1550,7 @@ var
 
     GetListOfPathToDelete(LTarget.CppIncludePath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := Result or (PathsToDelete.Count > 0);
     if PathCollection <> nil then
       for i := 0 to PathsToDelete.Count - 1 do
         PathCollection.AddCppIncludePath(PathsToDelete.Strings[i], LTarget, APlatform)
@@ -1385,6 +1563,7 @@ var
     begin
       GetListOfPathToDelete(LTarget.CppIncludePath_Clang32, PathsToDelete,
         CheckUnit, CheckInc, Target);
+      Result := Result or (PathsToDelete.Count > 0);
       for i := 0 to PathsToDelete.Count - 1 do
         LTarget.RemoveFromCppIncludePath_Clang32(PathsToDelete.Strings[i]);
       AddLog('C++ include for new compiler', APlatform);
@@ -1392,12 +1571,34 @@ var
 
     GetListOfPathToDelete(LTarget.CppSearchPath[APlatform], PathsToDelete,
       CheckUnit, CheckInc, Target);
+    Result := Result or (PathsToDelete.Count > 0);
     for i := 0 to PathsToDelete.Count - 1 do
       LTarget.RemoveFromCppSearchPath(PathsToDelete.Strings[i], APlatform);
     AddLog('C++ search', APlatform);
   end;
+  {............................................................................}
+  function CleanLibrarySearchPaths: Boolean;
+  var
+    IP: TInstallPlatform;
+  begin
+    Result := False;
+    for IP := Low(TInstallPlatform) to High(TInstallPlatform) do
+      if CanInstallInTarget(IP, Target) then
+        if CleanLibrarySearchPath(GetPlatformForInstallPlatform(IP)) then
+          Result := True;
+    if bpBCBuilder32 in Target.Personalities then
+      if CleanCBuilderPath(bpWin32) then
+        Result := True;
+    if bpBCBuilder64 in Target.Personalities then
+      if CleanCBuilderPath(bpWin64) then
+        Result := True;
+    if bpDelphi64x in Target.Personalities then { we did not define bpCBuilder64x yet }
+      if CleanCBuilderPath(bpWin64x) then
+        Result := True;
+  end;
 
 begin
+  Result := False;
   if (CheckUnit = '') and (CheckInc = '') then
     exit;
   PathsToDelete := TStringList.Create;
@@ -1413,21 +1614,7 @@ begin
   end;
   try
     Log := '';
-    CleanLibrarySearchPath(bpWin32);
-    if (Target.Personalities * [bpBCBuilder64, bpDelphi64]) <> [] then
-      CleanLibrarySearchPath(bpWin64);
-    if bpBCBuilder32 in Target.Personalities then
-      CleanCBuilderPath(bpWin32);
-    if bpBCBuilder64 in Target.Personalities then
-      CleanCBuilderPath(bpWin64);
-    if (bpDelphiOSX64 in Target.Personalities) and Config.OSX64 then
-      CleanLibrarySearchPath(bpOSX64);
-    if (bpDelphiOSXArm64 in Target.Personalities) and Config.OSXArm64 then
-      CleanLibrarySearchPath(bpOSXArm64);
-    if (bpDelphiAndroid32 in Target.Personalities) and Config.Android32 then
-      CleanLibrarySearchPath(bpAndroid32);
-    if (bpDelphiAndroid64 in Target.Personalities) and Config.Android64 then
-      CleanLibrarySearchPath(bpAndroid64);
+    Result := CleanLibrarySearchPaths;
     if (PathCollection <> nil) and (PathCollection.Count > 0) then
       BDSTarget.RemoveFromAnyLibPath(PathCollection);
     if Log <> '' then
@@ -1441,7 +1628,7 @@ end;
 
 function TfrmMain.InstallPackage(const PackageFileNameRun, PackageFileNameDsgn,
   Descr, IncludePath: string; Target: TJclBorRADToolInstallation;
-  Personality: TJclBorPersonality; Dual, Trial, Optional, RuntimeOnly: Boolean): Boolean;
+  Personality: TJclBorPersonality; Dual, Trial, Optional, RuntimeOnly, NoCE: Boolean): Boolean;
 var
   SrcPath, HppPath, ObjPath, DcpPath, BplPath, LibPaths, UnitPath, Options, NU: string;
   SpecialDsgnPackage: Boolean;
@@ -1496,38 +1683,70 @@ var
       ChangeDCUOutputDir(PackageFileNameRun);
       ShowStatusMsg(Format('Compiling package %s (%s)',
         [ExtractFileName(PackageFileNameRun), GetPlatformName(bpWin32)]));
-      {
-      if (Target is TJclBDSInstallation) and IsDelphiPackage(PackageFileNameRun) then
-        Result := TJclBDSInstallation(Target).CompileDelphiPackage(PackageFileNameRun,
-          BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options)
-      else
-      }
-        Result := Target.CompilePackage(PackageFileNameRun,
+      Result := Target.CompilePackage(PackageFileNameRun,
           BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options);
-      if Result and IsCBProjPackage(PackageFileNameRun) {and
-        (Target.VersionNumber <> 5)} then
+      if not Result then
+        AddLogAndUninstall(PackageFileNameRun, Target.DCC.Output);
+      if Result and not IsCBProjPackage(PackageFileNameRun) and
+        (Target.VersionNumber = BDSCommunityEditionVer)
+        {$IFnDEF TESTCOMMUNITYEDITION}
+         and not FileExists(PathAddSeparator(DcpPath) + ChangeFileExt(ExtractFileName(PackageFileNameRun), '.dcp'))
+        {$ENDIF}
+        then
+      begin
+        CEDetected := True;
+        ShowStatusMsg(Format('Copying Community Edition package %s (%s)',
+          [ExtractFileName(PackageFileNameRun), GetPlatformName(bpWin32)]));
+        Result := CopyPackageLibsD(PackageFileNameRun, Target, bpWin32);
+        if not Result and not NoCE then
+        begin
+          CEFailed := True;
+          AddLogAndUninstall(PackageFileNameRun,
+            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(bpWin32)]));
+        end;
+      end;
+      if Result and IsCBProjPackage(PackageFileNameRun) then
       begin
         ShowStatusMsg('Hiding source files');
         HideSourceFiles(SrcPath, ObjPath);
       end;
     end;
-    if not Result then
-      AddLogAndUninstall(PackageFileNameRun, Target.DCC.Output)
-    else if not RuntimeOnly then
+    if Result and not RuntimeOnly then
     begin
       ShowStatusMsg('Modifying package ' + ExtractFileName(PackageFileNameDsgn));
       ChangeDCUOutputDir(PackageFileNameDsgn);
       ShowStatusMsg('Installing package ' + ExtractFileName(PackageFileNameDsgn));
       Result := Target.InstallPackage(PackageFileNameDsgn,
         BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options);
-      if Result and IsCBProjPackage(PackageFileNameRun) {and
-        (Target.VersionNumber <> 5)} then
+      if not Result then
+        AddLogAndUninstall(PackageFileNameDsgn, Target.DCC.Output);
+      if Result and not IsCBProjPackage(PackageFileNameDsgn) and
+        (Target.VersionNumber = BDSCommunityEditionVer)
+        {$IFnDEF TESTCOMMUNITYEDITION}
+        and not FileExists(PathAddSeparator(DcpPath) + ChangeFileExt(ExtractFileName(PackageFileNameDsgn), '.dcp'))
+        {$ENDIF}
+        then
+      begin
+        CEDetected := True;
+        ShowStatusMsg(Format('Copying Community Edition package %s (%s)',
+          [ExtractFileName(PackageFileNameDsgn), GetPlatformName(bpWin32)]));
+        Result := CopyPackageLibsD(PackageFileNameDsgn, Target, bpWin32);
+        if not Result and not NoCE then
+        begin
+          AddLogAndUninstall(PackageFileNameRun,
+            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(bpWin32)]));
+          CEFailed := True;
+        end;
+        ShowStatusMsg('Registering package ' + ExtractFileName(PackageFileNameDsgn));
+        Result := Target.RegisterPackage(BinaryFileName(BplPath, PackageFileNameDsgn), Format(Descr, [Target.Name]));
+        if not Result then
+          AddLogAndUninstall(PackageFileNameDsgn, 'Error registering package')
+      end;
+      if Result and IsCBProjPackage(PackageFileNameRun) then
       begin
         ShowStatusMsg('Hiding source files');
         HideSourceFiles(SrcPath, ObjPath);
       end;
-      if not Result then
-        AddLogAndUninstall(PackageFileNameDsgn, Target.DCC.Output)
     end;
   end;
 
@@ -1557,20 +1776,20 @@ var
     end;
   end;
 
-  function CopyAndInstall: Boolean;
+  function CopyAndInstallCB: Boolean;
   begin
     Result := True;
     if SpecialDsgnPackage or RuntimeOnly then
     begin
       ShowStatusMsg('Copying package ' + ExtractFileName(PackageFileNameRun));
-      Result := CopyPackageLibs(PackageFileNameRun, Target);
+      Result := CopyPackageLibsCB(PackageFileNameRun, Target);
     end;
     if not Result then
       AddLogAndUninstall(PackageFileNameRun, 'Error while copying precompiled library files')
     else if not RuntimeOnly then
     begin
       ShowStatusMsg('Copying package ' + ExtractFileName(PackageFileNameDsgn));
-      Result := CopyPackageLibs(PackageFileNameDsgn, Target);
+      Result := CopyPackageLibsCB(PackageFileNameDsgn, Target);
       if not Result then
         AddLogAndUninstall(PackageFileNameDsgn, 'Error while copying precompiled library files')
     end;
@@ -1654,7 +1873,7 @@ begin
       (bpBCBuilder32 in Target.Personalities) then
     begin
       if Trial then
-        Result := CopyAndInstall
+        Result := CopyAndInstallCB
       else
       begin
         Result := CompileAndInstall('');
@@ -1667,7 +1886,7 @@ begin
       (bpBCBuilder32 in Target.Personalities) then
     begin
       if Trial then
-        Result := CopyAndInstall
+        Result := CopyAndInstallCB
       else
         Result := CompileAndInstallBpk;
     end
@@ -1741,7 +1960,7 @@ end;
 {------------------------------------------------------------------------------}
 function TfrmMain.CompileRuntime(const PackageFileName, Descr, IncludePath: string;
   Target: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
-  APlatform: TJclBDSPlatform; Dual, Trial, Optional: Boolean): Boolean;
+  APlatform: TJclBDSPlatform; Dual, Trial, Optional, NoCE: Boolean): Boolean;
 var
   HppPath, UnitPath, Options, NU, DcpPath, BplPath, LibPaths: string;
   {............................................................................}
@@ -1761,6 +1980,8 @@ var
     DcpPath := GetDcpPathEx(Target, APlatform);
     BplPath := GetBplPathEx(Target, APlatform);
     LibPaths := Target.LibrarySearchPath[APlatform];
+    //if APlatform = bpLinux64 then
+    //  LibPaths := '$(fmxlinux)\Lib\$(ProductVersion)\Release;' + LibPaths;
     ExpandEnvironmentVarCustom(LibPaths, Target.EnvironmentVariables);
     HppPath := PathRemoveSeparator
       (GetHPPPath(ExtractFilePath(PackageFileName), Target, Personality, Trial));
@@ -1812,13 +2033,30 @@ begin
         Result := (Target as TJclBDSInstallation).CompileDelphiPackage
           (PackageFileName, BplPath, DcpPath, HppPath,
           IncludePath, LibPaths, Options);
+        if not Result then
+          AddLogAndUninstall(PackageFileName, Target.DCC.Output);
+        if Result and (Target.VersionNumber = BDSCommunityEditionVer)
+          {$IFnDEF TESTCOMMUNITYEDITION}
+          and not FileExists(PathAddSeparator(DcpPath)+ ChangeFileExt(ExtractFileName(PackageFileName), '.dcp'))
+          {$ENDIF}
+        then
+        begin
+          CEDetected := True;
+          ShowStatusMsg(Format('Copying Community Edition package %s (%s)',
+            [ExtractFileName(PackageFileName), GetPlatformName(APlatform)]));
+          Result := CopyPackageLibsD(PackageFileName, Target, APlatform);
+          if not Result and not NoCE then
+          begin
+            AddLogAndUninstall(PackageFileName,
+              Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(APlatform)]));
+            CEFailed := True;
+          end;
+        end;
       finally
         ShowStatusMsg(Format('Finalizing compilation of package %s (%s)',
           [ExtractFileName(PackageFileName), GetPlatformName(APlatform)]));
         RenameAllFiles(ExtractFilePath(PackageFileName), '*._dcu', '.dcu');
       end;
-      if not Result then
-        AddLogAndUninstall(PackageFileName, Target.DCC.Output);
     end
     else if IsCBProjPackage(PackageFileName) and (bpBCBuilder64 in Target.Personalities)
       and (Target.VersionNumber in Config.BDSCBuilder64Ver) then
@@ -1857,7 +2095,7 @@ begin
 
 end;
 
-function TfrmMain.CopyPackageLibs(const PackageFileName: string;
+function TfrmMain.CopyPackageLibsCB(const PackageFileName: string;
   Target: TJclBorRADToolInstallation): Boolean;
 var
   FileName, Source, Dest: String;
@@ -1882,6 +2120,93 @@ begin
   Dest := PathAddSeparator(GetDcpPath(Target)) +
     ChangeFileExt(FileName, '.lib');
   Result := CopyFile(PChar(Source), PChar(Dest), False);
+end;
+
+function GetOutputPath2(APlatform: TJclBDSPlatform): String;
+begin
+  case APlatform of
+    bpWin32:          Result := '';
+    bpWin64:          Result := 'Win64';
+    bpWin64x:         Result := 'Win64x';
+    bpOSX64:          Result := 'OSX64';
+    bpOSXArm64:       Result := 'OSXArm64';
+    bpAndroid32:      Result := 'Android';
+    bpAndroid64:      Result := 'Android64';
+    bpLinux64:        Result := 'Linux64';
+    bpiOSDevice32:    Result :=  '?';
+    bpiOSDevice64:    Result := 'iOSDevice64';
+    bpiOSSimulatorArm64: Result := 'iOSSimARM64';
+    else              Result := '?';
+  end;
+end;
+
+function TfrmMain.CopyPackageLibsD(const PackageFileName: string;
+  Target: TJclBorRADToolInstallation; APlatform: TJclBDSPlatform): Boolean;
+var
+  SrcPath, DstPath: String;
+  FileName: String;
+
+  function DoCopy(FileName: String): Boolean;
+  var
+    Src, Dst: String;
+  begin
+    Src := SrcPath + FileName;
+    Dst := DstPath + FileName;
+    Result := CopyFile(PChar(Src), PChar(Dst), False);
+  end;
+
+begin
+  FileName := ExtractFileName(PackageFileName);
+  SrcPath := PathAddSeparator(PathAddSeparator(Config.SourcePath) + 'LibCE\' + GetOutputPath2(APlatform));
+  DstPath := PathAddSeparator(GetDcpPathEx(Target, APlatform));
+  Result := DoCopy(ChangeFileExt(FileName, '.dcp'));
+  if not Result then
+    exit;
+  case APlatform of
+    bpWin32, bpWin64x:
+      begin
+        Result := DoCopy(ChangeFileExt(FileName, '.bpi')) and
+          DoCopy(ChangeFileExt(FileName, '.lib'));
+      end;
+    bpWin64:
+      begin
+        Result := DoCopy(ChangeFileExt(FileName, '.bpi')) and
+          DoCopy(ChangeFileExt(FileName, '.a'));
+      end;
+    bpOSX64, bpOSXArm64, bpLinux64:
+      begin
+        Result := DoCopy(ChangeFileExt('lib' + FileName, '.a')) and
+          DoCopy(ChangeFileExt(FileName, '_nonshared.a')) and
+          DoCopy(ChangeFileExt(FileName, '.bpi')) and
+          DoCopy(ChangeFileExt(FileName, '.imp.o'));
+      end;
+    bpAndroid32, bpAndroid64, bpiOSDevice64, bpiOSSimulatorArm64:
+      begin
+        Result := DoCopy(ChangeFileExt('lib' + FileName, '.a'));
+      end;
+    else
+      Result := False;
+  end;
+  if not Result then
+    exit;
+  DstPath := PathAddSeparator(GetBplPathEx(Target, APlatform));
+  case APlatform of
+    bpWin32, bpWin64, bpWin64x:
+      begin
+        Result := DoCopy(ChangeFileExt(FileName, '.bpl'));
+      end;
+    bpOSX64, bpOSXArm64:
+      begin
+        Result := DoCopy(ChangeFileExt('bpl' + FileName, '.dylib'));
+      end;
+    bpAndroid32, bpAndroid64, bpiOSDevice64, bpiOSSimulatorArm64: ;
+    bpLinux64:
+      begin
+        Result := DoCopy(ChangeFileExt('bpl' + FileName, '.so'));
+      end;
+    else
+      Result := False;
+  end;
 end;
 
 function TfrmMain.CopyToUnitOutputPath(const PackageFileName: string;
@@ -2253,16 +2578,9 @@ var
   i, j:                       Integer;
   Target:                     TJclBorRADToolInstallation;
   Personality32, Personality64: TJclBorPersonality;
-  PkgNameRun, PkgNameDsgn, Path, PrevPath, IncludePath, PrevIncludePath, FullIncludePath32,
-    FullIncludePathWin64, FullIncludePathOSX64, FullIncludePathOSXArm64,
-    FullIncludePathAndroid32, FullIncludePathAndroid64,
-    HppPathWin32, ObjPathWin32, DCUPathWin32,
-    HppPathWin64, DCUPathWin64,
-    HppPathOSX64, DCUPathOSX64,
-    HppPathOSXArm64, DCUPathOSXArm64,
-    HppPathAndroid32, DCUPathAndroid32,
-    HppPathAndroid64, DCUPathAndroid64,
-    PkgTitle, Verb: String;
+  FullIncludePaths, HppPaths, DCUPaths: array [TInstallPlatform] of String;
+  PkgNameRun, PkgNameDsgn, Path, PrevPath, IncludePath, PrevIncludePath,
+  ObjPathWin32, PkgTitle, Verb: String;
   AllOk, Ok, Dual, Dual64, PackageExists: Boolean;
   Count: Integer;
   PathCollection: TJclLibPathCollection;
@@ -2304,84 +2622,35 @@ var
   end;
   {............................................................................}
   procedure SetFullIncludePaths;
+  var
+    IP: TInstallPlatform;
   begin
-    FullIncludePath32 := Target.LibrarySearchPath[bpWin32];
-    ExpandEnvironmentVarCustom(FullIncludePath32,
-      Target.EnvironmentVariables);
-    if [bpDelphi64, bpBCBuilder64] * Target.Personalities <> [] then
-    begin
-      FullIncludePathWin64 := Target.LibrarySearchPath[bpWin64];
-      ExpandEnvironmentVarCustom(FullIncludePathWin64,
-        Target.EnvironmentVariables);
-    end
-    else
-      FullIncludePathWin64 := '';
-    if [bpDelphiOSX64] * Target.Personalities <> [] then
-    begin
-      FullIncludePathOSX64 := Target.LibrarySearchPath[bpOSX64];
-      ExpandEnvironmentVarCustom(FullIncludePathOSX64,
-        Target.EnvironmentVariables);
-    end
-    else
-      FullIncludePathOSX64 := '';
-    if [bpDelphiOSXArm64] * Target.Personalities <> [] then
-    begin
-      FullIncludePathOSXArm64 := Target.LibrarySearchPath[bpOSXArm64];
-      ExpandEnvironmentVarCustom(FullIncludePathOSXArm64,
-        Target.EnvironmentVariables);
-    end
-    else
-      FullIncludePathOSXArm64 := '';
-    if [bpDelphiAndroid32] * Target.Personalities <> [] then
-    begin
-      FullIncludePathAndroid32 := Target.LibrarySearchPath[bpAndroid32];
-      ExpandEnvironmentVarCustom(FullIncludePathAndroid32,
-        Target.EnvironmentVariables);
-    end
-    else
-      FullIncludePathAndroid32 := '';
-    if [bpDelphiAndroid64] * Target.Personalities <> [] then
-    begin
-      FullIncludePathAndroid64 := Target.LibrarySearchPath[bpAndroid64];
-      ExpandEnvironmentVarCustom(FullIncludePathAndroid64,
-        Target.EnvironmentVariables);
-    end
-    else
-      FullIncludePathAndroid64 := '';
+    for IP := Low(TInstallPlatform) to High(TInstallPlatform) do
+      if CanInstallInTarget(IP, Target) then
+      begin
+        FullIncludePaths[IP] := Target.LibrarySearchPath[GetPlatformForInstallPlatform(IP)];
+        ExpandEnvironmentVarCustom(FullIncludePaths[IP], Target.EnvironmentVariables);
+      end
+      else
+        FullIncludePaths[IP] := '';
   end;
   {............................................................................}
   procedure AddToFullIncludePaths(const AIncludePath: String);
+  var
+    IP: TInstallPlatform;
   begin
-    if FullIncludePath32 = '' then
-      FullIncludePath32 := AIncludePath
-    else
-      FullIncludePath32 := FullIncludePath32 + ';' + AIncludePath;
-    if FullIncludePathWin64 = '' then
-      FullIncludePathWin64 := AIncludePath
-    else
-      FullIncludePathWin64 := FullIncludePathWin64 + ';' + AIncludePath;
-    if FullIncludePathOSX64 = '' then
-      FullIncludePathOSX64 := AIncludePath
-    else
-      FullIncludePathOSX64 := FullIncludePathOSX64 + ';' + AIncludePath;
-    if FullIncludePathOSXArm64 = '' then
-      FullIncludePathOSXArm64 := AIncludePath
-    else
-      FullIncludePathOSXArm64 := FullIncludePathOSXArm64 + ';' + AIncludePath;
-    if FullIncludePathAndroid32 = '' then
-      FullIncludePathAndroid32 := AIncludePath
-    else
-      FullIncludePathAndroid32 := FullIncludePathAndroid32 + ';' + AIncludePath;
-    if FullIncludePathAndroid64 = '' then
-      FullIncludePathAndroid64 := AIncludePath
-    else
-      FullIncludePathAndroid64 := FullIncludePathAndroid64 + ';' + AIncludePath;
+    for IP := Low(TInstallPlatform) to High(TInstallPlatform) do
+      if FullIncludePaths[IP] = '' then
+        FullIncludePaths[IP] := AIncludePath
+      else
+        FullIncludePaths[IP] := FullIncludePaths[IP] + ';' + AIncludePath;
   end;
   {............................................................................}
   procedure AddIncludePathToLibrarySearchPath(Target: TJclBorRADToolInstallation;
     AIncludePath: String; PathCollection: TJclLibPathCollection; j: Integer);
   var
     BDSTarget: TJclBDSInstallation;
+    IP: TInstallPlatform;
   begin
     AIncludePath := GetEnvPath(AIncludePath, Target);
     if (Target is TJclBDSInstallation) and (Target.IDEVersionNumber >= 5) then
@@ -2390,21 +2659,12 @@ var
       PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpWin32);
       if not Is32Bit[j] then
       begin
-        if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDS64Ver)) or
+        if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDSWin64Ver)) or
            ((bpBCBuilder64 in Target.Personalities) and (Target.VersionNumber in Config.BDSCBuilder64Ver)) then
           PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpWin64);
-        if (bpDelphiOSX64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSX64Ver) and
-          Config.OSX64 and IsOSX64[j] then
-          PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpOSX64);
-        if (bpDelphiOSXArm64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSXArm64Ver) and
-          Config.OSXArm64 and IsOSXArm64[j] then
-          PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpOSXArm64);
-        if (bpDelphiAndroid32 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid32Ver) and
-          Config.Android32 and IsAndroid32[j] then
-          PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpAndroid32);
-        if (bpDelphiAndroid64 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid64Ver) and
-          Config.Android64 and IsAndroid64[j] then
-          PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, bpAndroid64);
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+            PathCollection.AddLibrarySearchPath(AIncludePath, BDSTarget, GetPlatformForInstallPlatform(IP));
       end;
     end
     else
@@ -2412,21 +2672,12 @@ var
       Target.AddToLibrarySearchPath(AIncludePath, bpWin32);
       if not Is32Bit[j] then
       begin
-        if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDS64Ver)) or
+        if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDSWin64Ver)) or
            ((bpBCBuilder64 in Target.Personalities) and (Target.VersionNumber in Config.BDSCBuilder64Ver)) then
           Target.AddToLibrarySearchPath(AIncludePath, bpWin64);
-        if (bpDelphiOSX64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSX64Ver) and
-          Config.OSX64 and IsOSX64[j] then
-          Target.AddToLibrarySearchPath(AIncludePath, bpOSX64);
-        if (bpDelphiOSXArm64 in Target.Personalities) and (Target.VersionNumber in Config.BDSOSXArm64Ver) and
-          Config.OSXArm64 and IsOSXArm64[j] then
-          Target.AddToLibrarySearchPath(AIncludePath, bpOSXArm64);
-        if (bpDelphiAndroid32 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid32Ver) and
-          Config.Android32 and IsAndroid32[j] then
-          Target.AddToLibrarySearchPath(AIncludePath, bpAndroid32);
-        if (bpDelphiAndroid64 in Target.Personalities) and (Target.VersionNumber in Config.BDSAndroid64Ver) and
-          Config.Android64 and IsAndroid64[j] then
-          Target.AddToLibrarySearchPath(AIncludePath, bpAndroid64);
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+            Target.AddToLibrarySearchPath(AIncludePath, GetPlatformForInstallPlatform(IP));
       end;
     end;
   end;
@@ -2445,6 +2696,8 @@ var
       end;
       if not Is32Bit[j] and (bpBCBuilder64 in Target.Personalities) then
         PathCollection.AddCppIncludePath(IncludePath, Target, bpWin64);
+      if not Is32Bit[j] and (bpDelphi64x in Target.Personalities) then { we did not define bpBCBuilder64x yet }
+        PathCollection.AddCppIncludePath(IncludePath, Target, bpWin64x);
     end
     else
     begin
@@ -2465,6 +2718,7 @@ var
     AllPlatforms: Boolean);
   var
     BDSTarget: TJclBDSInstallation;
+    IP: TInstallPlatform;
   begin
     if (Target is TJclBDSInstallation) and (Target.IDEVersionNumber >= 5) then
     begin
@@ -2474,44 +2728,22 @@ var
       else
       begin
         PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpWin32);
-        PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathWin32, Target), BDSTarget, bpWin32);
+        PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[ipWin32], Target), BDSTarget, bpWin32);
       end;
       if not Is32Bit[j] and AllPlatforms then
       begin
-         if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDS64Ver)) or
+         if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDSWin64Ver)) or
             ((bpBCBuilder64 in Target.Personalities) and (Target.VersionNumber in Config.BDSCBuilder64Ver)) then
          begin
             PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpWin64);
-            PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathWin64, Target), BDSTarget, bpWin64);
+            PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[ipWin64], Target), BDSTarget, bpWin64);
          end;
-         if (bpDelphiOSX64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSOSX64Ver) and
-           Config.OSX64 and IsOSX64[j] then
-         begin
-           PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpOSX64);
-           PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathOSX64, Target), BDSTarget, bpOSX64);
-         end;
-         if (bpDelphiOSXArm64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSOSXArm64Ver) and
-           Config.OSXArm64 and IsOSXArm64[j] then
-         begin
-           PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpOSXArm64);
-           PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathOSXArm64, Target), BDSTarget, bpOSXArm64);
-         end;
-         if (bpDelphiAndroid32 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSAndroid32Ver) and
-           Config.Android32 and IsAndroid32[j] then
-         begin
-           PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpAndroid32);
-           PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathAndroid32, Target), BDSTarget, bpAndroid32);
-         end;
-         if (bpDelphiAndroid64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSAndroid64Ver) and
-           Config.Android64 and IsAndroid64[j] then
-         begin
-           PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, bpAndroid64);
-           PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathAndroid64, Target), BDSTarget, bpAndroid64);
-         end;
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+           begin
+             PathCollection.AddLibraryBrowsingPath(GetEnvPath(Path, Target), BDSTarget, GetPlatformForInstallPlatform(IP));
+             PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[IP], Target), BDSTarget, GetPlatformForInstallPlatform(IP));
+           end;
       end;
     end
     else
@@ -2521,44 +2753,22 @@ var
       else
       begin
         Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpWin32);
-        Target.AddToLibrarySearchPath(GetEnvPath(DCUPathWin32, Target), bpWin32);
+        Target.AddToLibrarySearchPath(GetEnvPath(DCUPaths[ipWin32], Target), bpWin32);
       end;
       if not Is32Bit[j] and AllPlatforms then
       begin
-         if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDS64Ver)) or
+         if ((bpDelphi64 in Target.Personalities) and (Target.VersionNumber in Config.BDSWin64Ver)) or
             ((bpBCBuilder64 in Target.Personalities) and (Target.VersionNumber in Config.BDSCBuilder64Ver)) then
          begin
            Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpWin64);
-           Target.AddToLibrarySearchPath(GetEnvPath(DCUPathWin64, Target), bpWin64);
+           Target.AddToLibrarySearchPath(GetEnvPath(DCUPaths[ipWin64], Target), bpWin64);
          end;
-         if (bpDelphiOSX64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSOSX64Ver) and
-           Config.OSX64 and IsOSX64[j] then
-         begin
-           Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpOSX64);
-           Target.AddToLibrarySearchPath(GetEnvPath(DCUPathOSX64, Target), bpOSX64);
-         end;
-         if (bpDelphiOSXArm64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSOSXArm64Ver) and
-           Config.OSXArm64 and IsOSXArm64[j] then
-         begin
-           Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpOSXArm64);
-           Target.AddToLibrarySearchPath(GetEnvPath(DCUPathOSXArm64, Target), bpOSXArm64);
-         end;
-         if (bpDelphiAndroid32 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSAndroid32Ver) and
-           Config.Android32 and IsAndroid32[j] then
-         begin
-           Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpAndroid32);
-           Target.AddToLibrarySearchPath(GetEnvPath(DCUPathAndroid32, Target), bpAndroid32);
-         end;
-         if (bpDelphiAndroid64 in Target.Personalities) and
-           (Target.VersionNumber in Config.BDSAndroid64Ver) and
-           Config.Android64 and IsAndroid64[j] then
-         begin
-           Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), bpAndroid64);
-           Target.AddToLibrarySearchPath(GetEnvPath(DCUPathAndroid64, Target), bpAndroid64);
-         end;
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+          begin
+            Target.AddToLibraryBrowsingPath(GetEnvPath(Path, Target), GetPlatformForInstallPlatform(IP));
+            Target.AddToLibrarySearchPath(GetEnvPath(DCUPaths[IP], Target), GetPlatformForInstallPlatform(IP));
+          end;
       end;
     end;
   end;
@@ -2575,8 +2785,8 @@ var
         if not IsTrial[j] then
           PathCollection.AddCppBrowsingPath(GetEnvPath(Path, Target), Target, bpWin32);
         if Target.VersionNumber = 4 then
-          Target.AddToCppSearchPath(GetEnvPath(HppPathWin32, Target), bpWin32);
-        PathCollection.AddCppIncludePath(GetEnvPath(HppPathWin32, Target), Target, bpWin32);
+          Target.AddToCppSearchPath(GetEnvPath(HppPaths[ipWin32], Target), bpWin32);
+        PathCollection.AddCppIncludePath(GetEnvPath(HppPaths[ipWin32], Target), Target, bpWin32);
         if SameText(ExtractFileExt(PkgNameRun), SourceExtensionRSBCBPackage) then
         begin
           PathCollection.AddLibrarySearchPath(GetEnvPath(ObjPathWin32, Target), Target, bpWin32);
@@ -2585,17 +2795,25 @@ var
         if FPathToSrcWin32 then
           PathCollection.AddCppLibraryPath(GetEnvPath(Path, Target), Target, bpWin32)
         else
-          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPathWin32, Target), Target, bpWin32);
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin32], Target), Target, bpWin32);
       end;
       if not Is32Bit[j] and AllPlatforms then
       begin
         if (bpBCBuilder64 in Target.Personalities) and
-          (Target.VersionNumber in Config.BDS64Ver * (Config.BDSCBuilderVer + Config.BDSDualVer)) then
+          (Target.VersionNumber in Config.BDSWin64Ver * (Config.BDSCBuilderVer + Config.BDSDualVer)) then
         begin
           if not IsTrial[j] then
             PathCollection.AddCppBrowsingPath(GetEnvPath(Path, Target), Target, bpWin64);
-          PathCollection.AddCppIncludePath(GetEnvPath(HppPathWin64, Target), Target, bpWin64);
-          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPathWin64, Target), Target, bpWin64);
+          PathCollection.AddCppIncludePath(GetEnvPath(HppPaths[ipWin64], Target), Target, bpWin64);
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin64], Target), Target, bpWin64);
+        end;
+        if (bpDelphi64x in Target.Personalities) and { we did not define bpBCBuilder64x yet }
+          (Target.VersionNumber in Config.BDSWin64xVer * (Config.BDSCBuilderVer + Config.BDSDualVer)) then
+        begin
+          if not IsTrial[j] then
+            PathCollection.AddCppBrowsingPath(GetEnvPath(Path, Target), Target, bpWin64x);
+          PathCollection.AddCppIncludePath(GetEnvPath(HppPaths[ipWin64x], Target), Target, bpWin64x);
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin64x], Target), Target, bpWin64x);
         end;
       end;
     end
@@ -2607,9 +2825,9 @@ var
         if not IsTrial[j] then
           Target.AddToCppBrowsingPath(GetEnvPath(Path, Target), bpWin32);
         if Target.VersionNumber = 4 then
-          Target.AddToCppSearchPath(GetEnvPath(HppPathWin32, Target), bpWin32);
-        Target.AddToCppIncludePath(GetEnvPath(HppPathWin32, Target), bpWin32);
-        Target.AddToCppIncludePath_Clang32(GetEnvPath(HppPathWin32, Target));
+          Target.AddToCppSearchPath(GetEnvPath(HppPaths[ipWin32], Target), bpWin32);
+        Target.AddToCppIncludePath(GetEnvPath(HppPaths[ipWin32], Target), bpWin32);
+        Target.AddToCppIncludePath_Clang32(GetEnvPath(HppPaths[ipWin32], Target));
         if SameText(ExtractFileExt(PkgNameRun), SourceExtensionRSBCBPackage) then
         begin
           Target.AddToLibrarySearchPath(GetEnvPath(ObjPathWin32, Target), bpWin32);
@@ -2623,30 +2841,53 @@ var
         end
         else
         begin
-          Target.AddToCppLibraryPath(GetEnvPath(DCUPathWin32, Target), bpWin32);
-          Target.AddToCppLibraryPath_Clang32(GetEnvPath(DCUPathWin32, Target));
+          Target.AddToCppLibraryPath(GetEnvPath(DCUPaths[ipWin32], Target), bpWin32);
+          Target.AddToCppLibraryPath_Clang32(GetEnvPath(DCUPaths[ipWin32], Target));
         end;
       end;
       if not Is32Bit[j] and AllPlatforms then
       begin
         if (bpBCBuilder64 in Target.Personalities) and
-          (Target.VersionNumber in Config.BDS64Ver * (Config.BDSCBuilderVer + Config.BDSDualVer)) then
+          (Target.VersionNumber in Config.BDSWin64Ver * (Config.BDSCBuilderVer + Config.BDSDualVer)) then
         begin
           if not IsTrial[j] then
             Target.AddToCppBrowsingPath(GetEnvPath(Path, Target), bpWin64);
-          Target.AddToCppIncludePath(GetEnvPath(HppPathWin64, Target), bpWin64);
-          Target.AddToCppLibraryPath(GetEnvPath(DCUPathWin64, Target), bpWin64);
+          Target.AddToCppIncludePath(GetEnvPath(HppPaths[ipWin64], Target), bpWin64);
+          Target.AddToCppLibraryPath(GetEnvPath(DCUPaths[ipWin64], Target), bpWin64);
         end;
       end;
     end;
   end;
   {............................................................................}
+  procedure InitDCUandHPPPaths(j: Integer);
+  var
+    IP: TInstallPlatform;
+  begin
+    HppPaths[ipWin32] := GetHPPPath(Path,           Target, Personality32,    IsTrial[j]);
+    ObjPathWin32 := GetObjPath(HppPaths[ipWin32],   Target, Personality32);
+    DCUPaths[ipWin32] := GetUnitOutputPath(Path,    Target, bpDelphi32,       IsTrial[j]);
+    HppPaths[ipWin64] := GetHPPPath(Path,           Target, Personality64,    IsTrial[j]);
+    DCUPaths[ipWin64] := GetUnitOutputPath(Path,    Target, Personality64,    IsTrial[j]);
+    for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+    begin
+      HppPaths[IP] := GetHPPPath(       Path, Target, GetDelphiPersonalityForInstallPlatform(IP), IsTrial[j]);
+      DCUPaths[IP] := GetUnitOutputPath(Path, Target, GetDelphiPersonalityForInstallPlatform(IP), IsTrial[j]);
+    end;
+  end;
+  {............................................................................}
+var
+  IP: TInstallPlatform;
+  OldPathsDeleted: Boolean;
 begin
   ShowStatusMsg('Starting');
   AllOk := True;
   txtLog.Clear;
   RemoveCheckedUninstallers;
-  if Config.UninstallUnchecked and (FUninstallers.Count > 0) then
+  if Config.UninstallUnchecked and (FUninstallers.Count > 0) and
+    (Application.MessageBox(
+      'Do you want to uninstall the components from unchecked IDEs?',
+      'Confirm Uninstall',
+      MB_YESNO or MB_ICONQUESTION) = IDYES) then
   begin
     Uninstall;
     txtLog.Lines.Add('');
@@ -2684,15 +2925,19 @@ begin
         PrevIncludePath := '';
         UninstallDepPackages(Target);
         ShowStatusMsg('Removing old versions');
+        OldPathsDeleted := False;
         for j := 0 to FPackages.Count - 1 do
         begin
-          DeletePathsToOldVersions(Target, FCheckUnits[j], FCheckIncs[j]);
+          if DeletePathsToOldVersions(Target, FCheckUnits[j], FCheckIncs[j]) then
+            OldPathsDeleted := True;
           if Config.CBuilder then
           begin
             DeleteAllCompilationResults(Target, Config.SourcePath + FPaths[j],
               Personality32, IsTrial[j]);
           end;
         end;
+        if OldPathsDeleted then
+          SetFullIncludePaths;
         Application.ProcessMessages; if Aborted then exit;
         try
           if Config.CBuilder then
@@ -2738,20 +2983,7 @@ begin
                   PkgNameDsgn := '?';
               end;
               Path := ExtractFilePath(PkgNameRun);
-              HppPathWin32 := GetHPPPath(Path,           Target, Personality32,    IsTrial[j]);
-              ObjPathWin32 := GetObjPath(HppPathWin32,   Target, Personality32);
-              DCUPathWin32 := GetUnitOutputPath(Path,    Target, bpDelphi32,       IsTrial[j]);
-              HppPathWin64 := GetHPPPath(Path,           Target, Personality64,    IsTrial[j]);
-              DCUPathWin64 := GetUnitOutputPath(Path,    Target, Personality64,    IsTrial[j]);
-              HppPathOSX64 := GetHPPPath(Path,           Target, bpDelphiOSX64,    IsTrial[j]);
-              DCUPathOSX64 := GetUnitOutputPath(Path,    Target, bpDelphiOSX64,    IsTrial[j]);
-              HppPathOSXArm64 := GetHPPPath(Path,        Target, bpDelphiOSXArm64, IsTrial[j]);
-              DCUPathOSXArm64 := GetUnitOutputPath(Path, Target, bpDelphiOSXArm64, IsTrial[j]);
-              HppPathAndroid32 := GetHPPPath(Path,       Target, bpDelphiAndroid32, IsTrial[j]);
-              DCUPathAndroid32 := GetUnitOutputPath(Path, Target, bpDelphiAndroid32, IsTrial[j]);
-              HppPathAndroid64 := GetHPPPath(Path,       Target, bpDelphiAndroid64, IsTrial[j]);
-              DCUPathAndroid64 := GetUnitOutputPath(Path, Target, bpDelphiAndroid64, IsTrial[j]);
-
+              InitDCUandHPPPaths(j);
               PackageExists := FileExists(PkgNameRun);
               if PackageExists or not IsOptional[j] then
               begin
@@ -2785,7 +3017,7 @@ begin
                   PathCollection.Clear;
                 end;
                 Ok := InstallPackage(PkgNameRun, PkgNameDsgn, FDescr[j],
-                  FullIncludePath32, Target, Personality32, Dual, IsTrial[j], IsOptional[j], IsRuntime[j]);
+                  FullIncludePaths[ipWin32], Target, Personality32, Dual, IsTrial[j], IsOptional[j], IsRuntime[j], NoCE[j]);
                 Application.ProcessMessages; if Aborted then exit;
                 if Ok and not Is32Bit[j] then
                 begin
@@ -2797,92 +3029,35 @@ begin
                   try
                     CompileRuntime(
                       GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, Personality64, IsTrial[j]),
-                      FDescr[j], FullIncludePathWin64, Target, Personality64, bpWin64,
-                      Dual64, IsTrial[j], IsOptional[j])
+                      FDescr[j], FullIncludePaths[ipWin64], Target, Personality64, bpWin64,
+                      Dual64, IsTrial[j], IsOptional[j], NoCE[j])
                   finally
                     if IsTrial[j] then
                       AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j],
                         Target, Personality64, True), Target, bpDelphi64);
                   end;
                   Application.ProcessMessages; if Aborted then exit;
-                  if IsOSX64[j] and (bpDelphiOSX64 in Target.Personalities) then
-                  begin
-                    // OSX64
-                    if IsTrial[j] then
-                      AdjustPathToUnitsInPackage(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSX64, True),
-                        Target, bpDelphiOSX64);
-                    try
-                      CompileRuntime(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSX64, IsTrial[j]),
-                        FDescr[j], FullIncludePathOSX64, Target, bpDelphiOSX64, bpOSX64,
-                        Dual64, IsTrial[j], IsOptional[j])
-                    finally
+                  for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+                    if (IP in PkgInstallPlatforms[j]) and CanInstallInTarget(IP, Target) then
+                    begin
+                      // OSX64, OSXArm64, Android32, Android64, Linux64, iOS64, iOSSim64
                       if IsTrial[j] then
-                        AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSX64, True),
-                          Target, bpDelphiOSX64);
+                        AdjustPathToUnitsInPackage(
+                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True),
+                            Target, GetDelphiPersonalityForInstallPlatform(IP));
+                      try
+                        CompileRuntime(
+                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), IsTrial[j]),
+                          FDescr[j], FullIncludePaths[IP], Target, GetDelphiPersonalityForInstallPlatform(IP),
+                          GetPlatformForInstallPlatform(IP), Dual64, IsTrial[j], IsOptional[j], NoCE[j])
+                      finally
+                        if IsTrial[j] then
+                          AdjustPathToUnitsInPackageBack(
+                            GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True),
+                            Target, GetDelphiPersonalityForInstallPlatform(IP));
+                      end;
+                      Application.ProcessMessages; if Aborted then exit;
                     end;
-                    Application.ProcessMessages; if Aborted then exit;
-                  end;
-                  if IsOSXArm64[j] and (bpDelphiOSXArm64 in Target.Personalities) then
-                  begin
-                    // OSXArm64
-                    if IsTrial[j] then
-                      AdjustPathToUnitsInPackage(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSXArm64, True),
-                        Target, bpDelphiOSXArm64);
-                    try
-                      CompileRuntime(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSXArm64, IsTrial[j]),
-                        FDescr[j], FullIncludePathOSXArm64, Target, bpDelphiOSXArm64, bpOSXArm64,
-                        Dual64, IsTrial[j], IsOptional[j])
-                    finally
-                      if IsTrial[j] then
-                        AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiOSXArm64, True),
-                        Target, bpDelphiOSXArm64);
-                    end;
-                    Application.ProcessMessages; if Aborted then exit;
-                  end;
-                  if IsAndroid32[j] and (bpDelphiAndroid32 in Target.Personalities) and
-                    (Target.VersionNumber in Config.GetBDSVersForPersonality(bpDelphiAndroid32)) then
-                  begin
-                    // Android 32
-                    if IsTrial[j] then
-                      AdjustPathToUnitsInPackage(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid32, True),
-                        Target, bpDelphiAndroid32);
-                    try
-                      CompileRuntime(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid32, IsTrial[j]),
-                        FDescr[j], FullIncludePathAndroid32, Target, bpDelphiAndroid32, bpAndroid32,
-                        Dual64, IsTrial[j], IsOptional[j])
-                    finally
-                      if IsTrial[j] then
-                        AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid32, True),
-                          Target, bpDelphiAndroid32);
-                    end;
-                    Application.ProcessMessages; if Aborted then exit;
-                  end;
-                  if IsAndroid64[j] and (bpDelphiAndroid64 in Target.Personalities) and
-                    (Target.VersionNumber in Config.GetBDSVersForPersonality(bpDelphiAndroid64)) then
-                  begin
-                    // Android 64
-                    if IsTrial[j] then
-                      AdjustPathToUnitsInPackage(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid64, True),
-                        Target, bpDelphiAndroid64);
-                    try
-                      CompileRuntime(
-                        GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid64, IsTrial[j]),
-                        FDescr[j], FullIncludePathAndroid64, Target, bpDelphiAndroid64, bpAndroid64,
-                        Dual64, IsTrial[j], IsOptional[j])
-                    finally
-                      if IsTrial[j] then
-                        AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, bpDelphiAndroid64, True),
-                          Target, bpDelphiAndroid64);
-                    end;
-                    Application.ProcessMessages; if Aborted then exit;
-                  end;
                 end;
               end
               else
@@ -2895,10 +3070,13 @@ begin
               AddToLastLogLine(' Installed.')
             else
             begin
-              if IsOptional[j] then
+              if IsOptional[j] or (NoCE[j] and (Target.VersionNumber = BDSCommunityEditionVer)) then
               begin
                 if PackageExists then
-                  AddToLastLogLine(' Skipped.')
+                  if not IsOptional[j] or (NoCE[j] and (Target.VersionNumber = BDSCommunityEditionVer)) then
+                    AddToLastLogLine(' Skipped for CE.')
+                  else
+                    AddToLastLogLine(' Skipped.')
               end
               else
               begin
@@ -2932,8 +3110,14 @@ begin
           ('However, some errors happened while installing optional files. You can click "Error log" button to view a detailed information.');
     end
     else
+    begin
       txtLog.Lines.Add
         ('Installation completed. Some packages were not installed. Click "Error log" button to view a detailed information.');
+      if CEFailed then
+      txtLog.Lines.Add
+        ('Errors were detected when installing in RAD Studio Community Edition. Possible reason: the setup can install only core packages, other packages require manual installation. '+
+        'See the installation instruction on the components'' downloading page.');
+    end;
     if RemovedPaths <> '' then
       txtLog.Lines.Add
         ('The installer removed some paths from RAD Studio library, because they contained the same units. Click "Removed paths" button to view a detailed information.');
@@ -2993,35 +3177,32 @@ procedure TfrmMain.Uninstall;
 var
   i:      Integer;
   Target: TJclBorRADToolInstallation;
-  HppPathWin32, ObjPathWin32, DCUPathWin64,
-  HppPathWin64, DCUPathWin32,
-  HppPathOSX64, DCUPathOSX64,
-  HppPathOSXArm64, DCUPathOSXArm64,
-  HppPathAndroid32, DCUPathAndroid32,
-  HppPathAndroid64, DCUPathAndroid64: String;
+  HppPaths, DcuPaths: array [TInstallPlatform] of String;
+  ObjPathWin32: String;
   {............................................................................}
   procedure GetHPPandOBJPaths(const DPath: String; AIsTrial: Boolean;
     ATarget: TJclBorRADToolInstallation);
+  var
+    IP: TInstallPlatform;
   begin
-    HppPathWin32 := GetHPPPath(DPath,   ATarget, bpBCBuilder32, AIsTrial);
-    ObjPathWin32 := GetObjPath(HppPathWin32, ATarget, bpBCBuilder32);
-    DCUPathWin32 := GetUnitOutputPath(DPath, ATarget, bpDelphi32, AIsTrial);
-    HppPathWin64 := GetHPPPath(DPath, ATarget, bpBCBuilder64, AIsTrial);
-    DCUPathWin64 := GetUnitOutputPath(DPath, ATarget, bpDelphi64, AIsTrial);
-    HppPathOSX64 := GetHPPPath(DPath, ATarget, bpDelphiOSX64, AIsTrial);
-    DCUPathOSX64 := GetUnitOutputPath(DPath, ATarget, bpDelphiOSX64, AIsTrial);
-    HppPathOSXArm64 := GetHPPPath(DPath, ATarget, bpDelphiOSXArm64, AIsTrial);
-    DCUPathOSXArm64 := GetUnitOutputPath(DPath, ATarget, bpDelphiOSXArm64, AIsTrial);
-    HppPathAndroid32 := GetHPPPath(DPath, ATarget, bpDelphiAndroid32, AIsTrial);
-    DCUPathAndroid32 := GetUnitOutputPath(DPath, ATarget, bpDelphiAndroid32, AIsTrial);
-    HppPathAndroid64 := GetHPPPath(DPath, ATarget, bpDelphiAndroid64, AIsTrial);
-    DCUPathAndroid64 := GetUnitOutputPath(DPath, ATarget, bpDelphiAndroid64, AIsTrial);
+    HppPaths[ipWin32] := GetHPPPath(DPath,   ATarget, bpBCBuilder32, AIsTrial);
+    ObjPathWin32 := GetObjPath(HppPaths[ipWin32], ATarget, bpBCBuilder32);
+    DcuPaths[ipWin32] := GetUnitOutputPath(DPath, ATarget, bpDelphi32, AIsTrial);
+    HppPaths[ipWin64] := GetHPPPath(DPath, ATarget, bpBCBuilder64, AIsTrial);
+    DcuPaths[ipWin64] := GetUnitOutputPath(DPath, ATarget, bpDelphi64, AIsTrial);
+    for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+    begin
+      HppPaths[IP] := GetHPPPath(       DPath, ATarget, GetDelphiPersonalityForInstallPlatform(IP), AIsTrial);
+      DcuPaths[IP] := GetUnitOutputPath(DPath, ATarget, GetDelphiPersonalityForInstallPlatform(IP), AIsTrial);
+    end;
   end;
   {............................................................................}
   function UninstallPackageFromAllPlatforms(DPkgNameRun, DPkgNameDsgn: String;
     ATarget: TJclBorRADToolInstallation; const APath, APackage: String; AIsTrial: Boolean): Boolean;
   var
     s: String;
+    IP: TInstallPlatform;
+    BDSP: TJclBDSPlatform;
   begin
     Result := True;
     if DPkgNameRun <> DPkgNameDsgn then
@@ -3034,42 +3215,27 @@ var
       ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(DPkgNameDsgn), GetPlatformName(bpWin32)]));
       Result := ATarget.UninstallPackage(DPkgNameDsgn, GetBplPath(ATarget), GetDcpPath(ATarget), bpWin32);
     end;
-    if (bpDelphi64 in ATarget.Personalities) and Config.Win64 then
+    if (bpDelphi64 in ATarget.Personalities) and (ipWin64 in Config.InstallPlatforms) then
     begin
       s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphi64, AIsTrial);
       ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpWin64)]));
       ATarget.UninstallPackage(s, GetBpl64Path(ATarget), GetDcp64Path(ATarget), bpWin64);
     end;
-    if (bpDelphiOSX64 in ATarget.Personalities) and Config.OSX64 then
-    begin
-      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphiOSX64, AIsTrial);
-      ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpOSX64)]));
-      ATarget.UninstallPackage(s, GetBplPathEx(ATarget, bpOSX64), GetDcpPathEx(ATarget, bpOSX64), bpOSX64);
-    end;
-    if (bpDelphiOSXArm64 in ATarget.Personalities) and Config.OSXArm64 then
-    begin
-      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphiOSXArm64, AIsTrial);
-      ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpOSXArm64)]));
-      ATarget.UninstallPackage(s, GetBplPathEx(ATarget, bpOSXArm64), GetDcpPathEx(ATarget, bpOSXArm64), bpOSXArm64);
-    end;
-    if (bpDelphiAndroid32 in ATarget.Personalities) and Config.Android32 then
-    begin
-      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphiAndroid32, AIsTrial);
-      ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpAndroid32)]));
-      ATarget.UninstallPackage(s, GetBplPathEx(ATarget, bpAndroid32), GetDcpPathEx(ATarget, bpAndroid32), bpAndroid32);
-    end;
-    if (bpDelphiAndroid64 in ATarget.Personalities) and Config.Android64 then
-    begin
-      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphiAndroid64, AIsTrial);
-      ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpAndroid64)]));
-      ATarget.UninstallPackage(s, GetBplPathEx(ATarget, bpAndroid64), GetDcpPathEx(ATarget, bpAndroid64), bpAndroid64);
-    end;
+    for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+      if Config.CanInstallIn(ATarget, IP) then
+      begin
+        BDSP := GetPlatformForInstallPlatform(IP);
+        s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, GetDelphiPersonalityForInstallPlatform(IP), AIsTrial);
+        ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(BDSP)]));
+        ATarget.UninstallPackage(s, GetBplPathEx(ATarget, BDSP), GetDcpPathEx(ATarget, BDSP), BDSP);
+      end;
   end;
   {............................................................................}
   procedure RemoveIncludePathFromLibrarySearchPath(Target: TJclBorRADToolInstallation;
     IncludePath: String; PathCollection: TJclLibPathCollection; j: Integer);
   var
     BDSTarget: TJclBDSInstallation;
+    IP: TInstallPlatform;
   begin
     IncludePath := GetEnvPath(IncludePath, Target);
     if (Target is TJclBDSInstallation) and (Target.IDEVersionNumber >= 5) then
@@ -3078,28 +3244,18 @@ var
       PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpWin32);
       if bpDelphi64 in Target.Personalities then
         PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpWin64);
-      if (bpDelphiOSX64 in Target.Personalities) and Config.OSX64 and IsOSX64[j] then
-        PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpOSX64);
-      if (bpDelphiOSXArm64 in Target.Personalities) and Config.OSXArm64 and IsOSXArm64[j] then
-        PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpOSXArm64);
-      if (bpDelphiAndroid32 in Target.Personalities) and Config.Android32 and IsAndroid32[j] then
-        PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpAndroid32);
-      if (bpDelphiAndroid64 in Target.Personalities) and Config.Android64 and IsAndroid64[j] then
-        PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, bpAndroid64);
+      for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+        if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+          PathCollection.AddLibrarySearchPath(IncludePath, BDSTarget, GetPlatformForInstallPlatform(IP));
     end
     else
     begin
       Target.RemoveFromLibrarySearchPath(IncludePath, bpWin32);
       if bpDelphi64 in Target.Personalities then
         Target.RemoveFromLibrarySearchPath(IncludePath, bpWin64);
-      if (bpDelphiOSX64 in Target.Personalities) and Config.OSX64 and IsOSX64[j] then
-        Target.RemoveFromLibrarySearchPath(IncludePath, bpOSX64);
-      if (bpDelphiOSXArm64 in Target.Personalities) and Config.OSXArm64 and IsOSXArm64[j] then
-        Target.RemoveFromLibrarySearchPath(IncludePath, bpOSXArm64);
-      if (bpDelphiAndroid32 in Target.Personalities) and Config.Android32 and IsAndroid32[j] then
-        Target.RemoveFromLibrarySearchPath(IncludePath, bpAndroid32);
-      if (bpDelphiAndroid64 in Target.Personalities) and Config.Android64 and IsAndroid64[j] then
-        Target.RemoveFromLibrarySearchPath(IncludePath, bpAndroid64);
+      for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+        if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+          Target.RemoveFromLibrarySearchPath(IncludePath, GetPlatformForInstallPlatform(IP));
     end;
   end;
   {............................................................................}
@@ -3116,6 +3272,8 @@ var
       end;
       if bpBCBuilder64 in Target.Personalities then
         PathCollection.AddCppIncludePath(IncludePath, Target, bpWin64);
+      if bpDelphi64x in Target.Personalities then { we did not define bpBCBuilder64x yet }
+        PathCollection.AddCppIncludePath(IncludePath, Target, bpWin64x);
     end
     else
     begin
@@ -3135,6 +3293,8 @@ var
     AllPlatforms: Boolean);
   var
     BDSTarget: TJclBDSInstallation;
+    IP: TInstallPlatform;
+    BDSP: TJclBDSPlatform;
   begin
     if (Target is TJclBDSInstallation) and (Target.IDEVersionNumber >= 5) then
     begin
@@ -3142,35 +3302,22 @@ var
       PathCollection.AddLibrarySearchPath(GetEnvPath(DPath, Target), BDSTarget, bpWin32);
       PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpWin32);
       PathCollection.AddLibrarySearchPath(GetEnvPath(ObjPathWin32, Target), BDSTarget, bpWin32);
-      if DCUPathWin32 <> '' then
-        PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathWin32, Target), BDSTarget, bpWin32);
+      if DCUPaths[ipWin32] <> '' then
+        PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[ipWin32], Target), BDSTarget, bpWin32);
       if AllPlatforms then
       begin
-        if bpDelphi64 in Target.Personalities then
+        if (bpDelphi64 in Target.Personalities) and (ipWin64 in Config.InstallPlatforms)  then
         begin
           PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpWin64);
-          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathWin64, Target), BDSTarget, bpWin64);
+          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[ipWin64], Target), BDSTarget, bpWin64);
         end;
-        if (bpDelphiOSX64 in Target.Personalities) and Config.OSX64 and IsOSX64[j] then
-        begin
-          PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpOSX64);
-          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathOSX64, Target), BDSTarget, bpOSX64);
-        end;
-        if (bpDelphiOSXArm64 in Target.Personalities) and Config.OSXArm64 and IsOSXArm64[j] then
-        begin
-          PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpOSXArm64);
-          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathOSXArm64, Target), BDSTarget, bpOSXArm64);
-        end;
-        if (bpDelphiAndroid32 in Target.Personalities) and Config.Android32 and IsAndroid32[j] then
-        begin
-          PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpAndroid32);
-          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathAndroid32, Target), BDSTarget, bpAndroid32);
-        end;
-        if (bpDelphiAndroid64 in Target.Personalities) and Config.Android64 and IsAndroid64[j] then
-        begin
-          PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, bpAndroid64);
-          PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPathAndroid64, Target), BDSTarget, bpAndroid64);
-        end;
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+          begin
+            BDSP := GetPlatformForInstallPlatform(IP);
+            PathCollection.AddLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSTarget, BDSP);
+            PathCollection.AddLibrarySearchPath(GetEnvPath(DCUPaths[IP], Target), BDSTarget, BDSP);
+          end;
       end;
     end
     else
@@ -3178,35 +3325,22 @@ var
       Target.RemoveFromLibrarySearchPath(GetEnvPath(DPath, Target), bpWin32);
       Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpWin32);
       Target.RemoveFromLibrarySearchPath(GetEnvPath(ObjPathWin32, Target), bpWin32);
-      if DCUPathWin32 <> '' then
-        Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathWin32, Target), bpWin32);
+      if DCUPaths[ipWin32] <> '' then
+        Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPaths[ipWin32], Target), bpWin32);
       if AllPlatforms then
       begin
-        if (bpDelphi64 in Target.Personalities) and Config.Win64 then
+        if (bpDelphi64 in Target.Personalities) and (ipWin64 in Config.InstallPlatforms) then
         begin
           Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpWin64);
-          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathWin64, Target), bpWin64);
+          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPaths[ipWin64], Target), bpWin64);
         end;
-        if (bpDelphiOSX64 in Target.Personalities) and Config.OSX64 and IsOSX64[j]  then
-        begin
-          Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpOSX64);
-          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathOSX64, Target), bpOSX64);
-        end;
-        if (bpDelphiOSXArm64 in Target.Personalities) and Config.OSXArm64 and IsOSXArm64[j]  then
-        begin
-          Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpOSXArm64);
-          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathOSXArm64, Target), bpOSXArm64);
-        end;
-        if (bpDelphiAndroid32 in Target.Personalities) and Config.Android32 and IsAndroid32[j] then
-        begin
-          Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpAndroid32);
-          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathAndroid32, Target), bpAndroid32);
-        end;
-        if (bpDelphiAndroid64 in Target.Personalities) and Config.Android64 and IsAndroid64[j] then
-        begin
-          Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), bpAndroid64);
-          Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPathAndroid64, Target), bpAndroid64);
-        end;
+        for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
+          if Config.CanInstallIn(Target, IP) and (IP in PkgInstallPlatforms[j]) then
+          begin
+            BDSP := GetPlatformForInstallPlatform(IP);
+            Target.RemoveFromLibraryBrowsingPath(GetEnvPath(DPath, Target), BDSP);
+            Target.RemoveFromLibrarySearchPath(GetEnvPath(DCUPaths[IP], Target), BDSP);
+          end;
       end;
     end;
   end;
@@ -3224,18 +3358,25 @@ var
           PathCollection.AddCppBrowsingPath(DPath, Target, bpWin32);
         PathCollection.AddCppLibraryPath(DPath, Target, bpWin32);
         PathCollection.AddCppLibraryPath(GetEnvPath(ObjPathWin32, Target), Target, bpWin32);
-        if DCUPathWin32 <> '' then
-          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPathWin32, Target), Target, bpWin32);
-        PathCollection.AddCppIncludePath(GetEnvPath(HPPPathWin32, Target), Target, bpWin32);
+        if DCUPaths[ipWin32] <> '' then
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin32], Target), Target, bpWin32);
+        PathCollection.AddCppIncludePath(GetEnvPath(HPPPaths[ipWin32], Target), Target, bpWin32);
       end;
       if AllPlatforms then
       begin
-        if (bpBCBuilder64 in Target.Personalities) and Config.Win64 then
+        if (bpBCBuilder64 in Target.Personalities) and (ipWin64 in Config.InstallPlatforms) then
         begin
           if not IsTrial[j] then
             PathCollection.AddCppBrowsingPath(DPath, Target, bpWin64);
-          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPathWin64, Target), Target, bpWin64);
-          PathCollection.AddCppIncludePath(GetEnvPath(HPPPathWin64, Target), Target, bpWin64);
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin64], Target), Target, bpWin64);
+          PathCollection.AddCppIncludePath(GetEnvPath(HPPPaths[ipWin64], Target), Target, bpWin64);
+        end;
+        if (bpDelphi64x in Target.Personalities) and (ipWin64 in Config.InstallPlatforms) then { we did not define bpBCBuilder64x yet }
+        begin
+          if not IsTrial[j] then
+            PathCollection.AddCppBrowsingPath(DPath, Target, bpWin64x);
+          PathCollection.AddCppLibraryPath(GetEnvPath(DCUPaths[ipWin64x], Target), Target, bpWin64x);
+          PathCollection.AddCppIncludePath(GetEnvPath(HPPPaths[ipWin64x], Target), Target, bpWin64x);
         end;
       end;
     end
@@ -3247,24 +3388,24 @@ var
           Target.RemoveFromCppBrowsingPath(DPath, bpWin32);
         Target.RemoveFromCppLibraryPath(DPath, bpWin32);
         Target.RemoveFromCppLibraryPath(GetEnvPath(ObjPathWin32, Target), bpWin32);
-        if DCUPathWin32 <> '' then
-          Target.RemoveFromCppLibraryPath(GetEnvPath(DCUPathWin32, Target), bpWin32);
-        Target.RemoveFromCppIncludePath(GetEnvPath(HppPathWin32, Target), bpWin32);
+        if DCUPaths[ipWin32] <> '' then
+          Target.RemoveFromCppLibraryPath(GetEnvPath(DCUPaths[ipWin32], Target), bpWin32);
+        Target.RemoveFromCppIncludePath(GetEnvPath(HppPaths[ipWin32], Target), bpWin32);
         Target.RemoveFromCppLibraryPath_Clang32(DPath);
         Target.RemoveFromCppLibraryPath_Clang32(GetEnvPath(ObjPathWin32, Target));
-        if DCUPathWin32 <> '' then
-          Target.RemoveFromCppLibraryPath_Clang32(GetEnvPath(DCUPathWin32, Target));
-        Target.RemoveFromCppIncludePath_Clang32(GetEnvPath(HppPathWin32, Target));
+        if DCUPaths[ipWin32] <> '' then
+          Target.RemoveFromCppLibraryPath_Clang32(GetEnvPath(DCUPaths[ipWin32], Target));
+        Target.RemoveFromCppIncludePath_Clang32(GetEnvPath(HppPaths[ipWin32], Target));
       end;
       if AllPlatforms then
       begin
-        if (bpBCBuilder64 in Target.Personalities) and Config.Win64 then
+        if (bpBCBuilder64 in Target.Personalities) and (ipWin64 in Config.InstallPlatforms)  then
         begin
           if not IsTrial[j] then
             Target.RemoveFromCppBrowsingPath(DPath, bpWin64);
           Target.RemoveFromCppLibraryPath(DPath, bpWin64);
-          Target.RemoveFromCppLibraryPath(GetEnvPath(DCUPathWin64, Target), bpWin64);
-          Target.RemoveFromCppIncludePath(GetEnvPath(HppPathWin64, Target), bpWin64);
+          Target.RemoveFromCppLibraryPath(GetEnvPath(DCUPaths[ipWin64], Target), bpWin64);
+          Target.RemoveFromCppIncludePath(GetEnvPath(HppPaths[ipWin64], Target), bpWin64);
         end;
       end;
     end;
@@ -3352,9 +3493,9 @@ var
           if CBPkgNameRun <> DPkgNameRun then
           begin
             CBPath := ExtractFilePath(CBPkgNameRun);
-            HppPathWin32 := GetHPPPath(CBPath, Target, bpBCBuilder32, IsTrial[j]);
-            ObjPathWin32 := GetObjPath(HppPathWin32, Target, bpBCBuilder32);
-            DCUPathWin32 := '';
+            HppPaths[ipWin32] := GetHPPPath(CBPath, Target, bpBCBuilder32, IsTrial[j]);
+            ObjPathWin32 := GetObjPath(HppPaths[ipWin32], Target, bpBCBuilder32);
+            DCUPaths[ipWin32] := '';
             txtLog.Lines.Add('Uninstalling ' + ExtractFileName(CBPkgNameDsgn) +
               ' from ' + Target.Name + '...');
             if CBPkgNameRun <> CBPkgNameDsgn then
@@ -3532,18 +3673,36 @@ begin
     Config.DelphiVer := [];
     Config.BDSVer := [];
     Config.BDSDualVer := [];
-    Config.BDS64Ver := [];
+    Config.BDSWin64Ver := [];
+    Config.BDSWin64xVer := [];
     Config.BDSCBuilder64Ver := [];
     Config.BDSOSX64Ver := [];
     Config.BDSOSXArm64Ver := [];
     Config.BDSAndroid32Ver := [];
     Config.BDSAndroid64Ver := [];
+    Config.BDSiOS64Ver := [];
+    Config.BDSiOSSimArm64Ver := [];
+    Config.BDSLinux64Ver := [];
     Config.CBuilder := ini.ReadInteger(TargetsSection, 'CBuilder', 0) <> 0;
-    Config.Win64 := ini.ReadInteger(TargetsSection, '64bits', 0) <> 0;
-    Config.OSX64 := ini.ReadInteger(TargetsSection, 'OSX64', 0) <> 0;
-    Config.OSXArm64 := ini.ReadInteger(TargetsSection, 'OSXArm64', 0) <> 0;
-    Config.Android32 := ini.ReadInteger(TargetsSection, 'Android32', 0) <> 0;
-    Config.Android64 := ini.ReadInteger(TargetsSection, 'Android64', 0) <> 0;
+    Config.InstallPlatforms := [ipWin32];
+    if ini.ReadInteger(TargetsSection, '64bits', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipWin64);
+    if ini.ReadInteger(TargetsSection, '64bitsX', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipWin64x);
+    if ini.ReadInteger(TargetsSection, 'OSX64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipOSX64);
+    if ini.ReadInteger(TargetsSection, 'OSXArm64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipOSXArm64);
+    if ini.ReadInteger(TargetsSection, 'Android32', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipAndroid32);
+    if ini.ReadInteger(TargetsSection, 'Android64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipAndroid64);
+    if ini.ReadInteger(TargetsSection, 'Linux64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipLinux64);
+    if ini.ReadInteger(TargetsSection, 'iOSDevice64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipIOS64);
+    if ini.ReadInteger(TargetsSection, 'iOSSimARM64', 0) <> 0 then
+      Include(Config.InstallPlatforms, ipIOSSimArm64);
     MaxBDS := Byte(ini.ReadInteger(TargetsSection, 'MaxRADStudio', 16));
     Config.Scheme := ini.ReadInteger(TargetsSection, 'Scheme', 1);
     if not (Config.Scheme in [1, 2]) then
@@ -3571,34 +3730,28 @@ begin
       AddRange(Config.BDSVer, MinBDS, MaxBDS);
       MinBDS := Byte(ini.ReadInteger(TargetsSection, 'MinDualRADStudio', 3));
       AddRange(Config.BDSDualVer, MinBDS, MaxBDS);
+      if ipWin64 in Config.InstallPlatforms then
+      begin
+        Config.BDSWin64Ver := Config.BDSVer * AllBDSWin64Ver;
+        Config.BDS64DualVer := Config.BDSDualVer * AllBDSCBuilderWin64Ver;
+      end;
+      if ipWin64x in Config.InstallPlatforms then
+        Config.BDSWin64xVer := Config.BDSVer * AllBDSWin64xVer;
+      if ipOSX64 in Config.InstallPlatforms then
+        Config.BDSOSX64Ver := Config.BDSVer * AllBDSOSX64Ver;
+      if ipOSXArm64 in Config.InstallPlatforms then
+        Config.BDSOSXArm64Ver := Config.BDSVer * AllBDSOSXArm64Ver;
+      if ipAndroid32 in Config.InstallPlatforms then
+        Config.BDSAndroid32Ver := Config.BDSVer * AllBDSAndroid32Ver;
+      if ipAndroid64 in Config.InstallPlatforms then
+        Config.BDSAndroid64Ver := Config.BDSVer * AllBDSAndroid64Ver;
+      if ipLinux64 in Config.InstallPlatforms then
+        Config.BDSLinux64Ver := Config.BDSVer * AllBDSLinux64Ver;
+      if ipIOS64 in Config.InstallPlatforms then
+        Config.BDSiOS64Ver := Config.BDSVer * AllBDSIOS64Ver;
+      if ipIOSSimArm64 in Config.InstallPlatforms then
+        Config.BDSiOSSimArm64Ver := Config.BDSVer * AllBDSIOSSimArm64Ver;
     end;
-
-    if Config.Win64 and (not Config.CBuilder or FullUninstall) then
-    begin
-      Config.BDS64Ver := Config.BDSVer * AllBDS64Ver;
-      Config.BDS64DualVer := Config.BDSDualVer * AllBDSCBuilder64Ver;
-    end;
-
-    if Config.OSX64 and (not Config.CBuilder or FullUninstall) then
-    begin
-      Config.BDSOSX64Ver := Config.BDSVer * AllBDSOSX64Ver;
-    end;
-
-    if Config.OSXArm64 and (not Config.CBuilder or FullUninstall) then
-    begin
-      Config.BDSOSXArm64Ver := Config.BDSVer * AllBDSOSXArm64Ver;
-    end;
-
-    if Config.Android32 and (not Config.CBuilder or FullUninstall) then
-    begin
-      Config.BDSAndroid32Ver := Config.BDSVer * AllBDSAndroid32Ver;
-    end;
-
-    if Config.Android64 and (not Config.CBuilder or FullUninstall) then
-    begin
-      Config.BDSAndroid64Ver := Config.BDSVer * AllBDSAndroid64Ver;
-    end;
-
     if Config.CBuilder then
     begin
       Config.IDE := 'C++Builder';
@@ -3610,9 +3763,8 @@ begin
       Config.BDSCBuilderVer := Config.BDSDualVer;
     end;
 
-    if Config.Win64 and (Config.CBuilder or FullUninstall) and (Config.Scheme=2) then
+    if (ipWin64 in Config.InstallPlatforms) and (Config.CBuilder or FullUninstall) and (Config.Scheme=2) then
       Config.BDSCBuilder64Ver := Config.BDSCBuilderVer * AllBDSCompleteCBuilder64Ver;
-
 
     Config.SourcePath := ini.ReadString(InstallSection, 'Files', '');
     if Config.SourcePath <> '' then
@@ -3687,10 +3839,8 @@ begin
     SetLength(IsOptional, FPackages.Count);
     SetLength(Is32Bit, FPackages.Count);
     SetLength(IsRunTime,FPackages.Count);
-    SetLength(IsOSX64,FPackages.Count);
-    SetLength(IsOSXArm64,FPackages.Count);
-    SetLength(IsAndroid32,FPackages.Count);
-    SetLength(IsAndroid64,FPackages.Count);
+    SetLength(PkgInstallPlatforms,FPackages.Count);
+    SetLength(NoCE, FPackages.Count);
     HasTrial := False;
     for i := 0 to FPackages.Count - 1 do
     begin
@@ -3704,14 +3854,29 @@ begin
         '32Bit' + IntToStr(i + 1), 0) <> 0;
       IsRuntime[i] := ini.ReadInteger(ComponentsSection,
         'Runtime' + IntToStr(i + 1), 0) <> 0;
-      IsOSX64[i] := ini.ReadInteger(ComponentsSection,
-        'OSX64' + IntToStr(i + 1), 0) <> 0;
-      IsOSXArm64[i] := ini.ReadInteger(ComponentsSection,
-        'OSXARM64' + IntToStr(i + 1), 0) <> 0;
-      IsAndroid32[i] := ini.ReadInteger(ComponentsSection,
-        'Android32' + IntToStr(i + 1), 0) <> 0;
-      IsAndroid64[i] := ini.ReadInteger(ComponentsSection,
-        'Android64' + IntToStr(i + 1), 0) <> 0;
+      NoCE[i] := ini.ReadInteger(ComponentsSection,
+        'NoCE' + IntToStr(i + 1), 0) <> 0;
+      PkgInstallPlatforms[i] := [ipWin32];
+      if not Is32bit[i] then
+      begin
+        Include(PkgInstallPlatforms[i], ipWin64);
+        if ipWin64x in Config.InstallPlatforms then
+          Include(PkgInstallPlatforms[i], ipWin64x);
+        if ini.ReadInteger(ComponentsSection, 'OSX64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipOSX64);
+        if ini.ReadInteger(ComponentsSection, 'OSXARM64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipOSXArm64);
+        if ini.ReadInteger(ComponentsSection, 'Android32' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipAndroid32);
+        if ini.ReadInteger(ComponentsSection, 'Android64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipAndroid64);
+        if ini.ReadInteger(ComponentsSection, 'Linux64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipLinux64);
+        if ini.ReadInteger(ComponentsSection, 'iOSDevice64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipIOS64);
+        if ini.ReadInteger(ComponentsSection, 'iOSSimARM64' + IntToStr(i + 1), 0) <> 0 then
+          Include(PkgInstallPlatforms[i], ipIOSSimArm64);
+      end;
     end;
     i := 1;
     repeat
