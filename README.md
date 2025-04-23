@@ -10,13 +10,14 @@ An application to install components in Delphi/C++Builder IDE
 
 This application can install packages (containing source code or trial units of VCL and FireMonkey components) in Delphi and C++Builder IDE.
 
-Supported version of Delphi: from 5 to 11 Alexandria.
+Supported version of Delphi: from 5 to 12 Athens.
 
-Supported version of C++Builder: from 6 to 11 Alexandria.
+Supported version of C++Builder: from 6 to  12 Athens.
 
 Exception: C++Builder-only packages for BDS 2006 are not supported.
 
-Supported platforms: Windows (32-bit and 64-bit), macOS (64-bit Intel and ARM), Android (32-bit and 64-bit)
+Supported platforms: Windows (32-bit and 64-bit), macOS (64-bit Intel and ARM), Android (32-bit and 64-bit), iOS 64-bit, iOS 64-bit Simulator, Linux.
+Supported IDE: 32-bit and 64-bit
 
 ## Features
 
