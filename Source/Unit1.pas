@@ -228,7 +228,7 @@ type
       Trial: Boolean): String;
     function GetPkgFile64(const RootPath, PkgPrefix: String;
       Inst: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
-      Trial: Boolean): String;
+      Trial, DesignTime: Boolean): String;
     function LoadConfig(FileName: String; var ErrorMsg: String): Boolean;
     procedure FillIDEList;
     procedure FillUninstallers;
@@ -712,7 +712,7 @@ end;
 
 function TfrmMain.GetPkgFile64(const RootPath, PkgPrefix: String;
   Inst: TJclBorRADToolInstallation; Personality: TJclBorPersonality;
-  Trial: Boolean): String;
+  Trial, DesignTime: Boolean): String;
 var
   Suffix: String;
 begin
@@ -725,6 +725,8 @@ begin
     2: Suffix := '';
     else exit;
   end;
+  if DesignTime then
+    Suffix := '_Dsgn';
 
   Result := GetPkgFile(RootPath, PkgPrefix, Suffix, Inst, Personality, Trial);
 end;
@@ -1632,16 +1634,18 @@ function TfrmMain.InstallPackage(const PackageFileNameRun, PackageFileNameDsgn,
 var
   SrcPath, HppPath, ObjPath, DcpPath, BplPath, LibPaths, UnitPath, Options, NU: string;
   SpecialDsgnPackage: Boolean;
+  LPlatform: TJclBDSPlatform;
+  DelphiPersonality: TJclBorPersonality;
 
   procedure CleanPackagesCache;
   begin
     if Target.RadToolKind = brBorlandDevStudio then
     begin
       (Target as TJclBDSInstallation).CleanPackageCache
-        (BinaryFileName(BplPath, PackageFileNameRun));
+        (BinaryFileName(BplPath, PackageFileNameRun), LPlatform);
       if SpecialDsgnPackage then
         (Target as TJclBDSInstallation).CleanPackageCache
-          (BinaryFileName(BplPath, PackageFileNameDsgn));
+          (BinaryFileName(BplPath, PackageFileNameDsgn), LPlatform);
     end;
   end;
 
@@ -1650,30 +1654,31 @@ var
     if not (Optional and FIgnoreOptionalErrors) then
       ErrorLog := ErrorLog + Format(LogErrorFmtStr, [PackageFileName]) + Msg;
     ShowStatusMsg(Format('Uninstalling package %s (%s)',
-      [ExtractFileName(ChangeFileExt(PackageFileNameRun, SourceExtensionDelphiPackage)), GetPlatformName(bpWin32)]));
+      [ExtractFileName(ChangeFileExt(PackageFileNameRun, SourceExtensionDelphiPackage)), GetPlatformName(LPlatform)]));
     Target.UninstallPackage(ChangeFileExt(PackageFileNameRun, SourceExtensionDelphiPackage),
-      BplPath, DcpPath, bpWin32);
+      BplPath, DcpPath, LPlatform, LPlatform);
     if SpecialDsgnPackage and not RuntimeOnly then
     begin
       ShowStatusMsg(Format('Uninstalling package %s (%s)',
-        [ExtractFileName(ChangeFileExt(PackageFileNameDsgn, SourceExtensionDelphiPackage)), GetPlatformName(bpWin32)]));
+        [ExtractFileName(ChangeFileExt(PackageFileNameDsgn, SourceExtensionDelphiPackage)), GetPlatformName(LPlatform)]));
       Target.UninstallPackage(ChangeFileExt(PackageFileNameDsgn, SourceExtensionDelphiPackage),
-        BplPath, DcpPath, bpWin32);
+        BplPath, DcpPath, LPlatform, LPlatform);
     end;
   end;
 
   procedure ChangeDCUOutputDir(const PackageFileName: String);
   begin
-    if HasTrial or Config.CBuilder then
+    if HasTrial or Config.CBuilder or (LPlatform <> bpWin32) then
       exit;
     if FPathToSrcWin32 then
-      ChangeDCUOutput(ChangeFileExt(PackageFileName, SourceExtensionDProject), '.', Target.VersionNumber)
+      ChangeDCUOutput(ChangeFileExt(PackageFileName, SourceExtensionDProject),
+        '.', Target.VersionNumber)
     else
-      ChangeDCUOutput(ChangeFileExt(PackageFileName, SourceExtensionDProject), GetUnitOutputPath('', Target, bpDelphi32, False), Target.VersionNumber);
+      ChangeDCUOutput(ChangeFileExt(PackageFileName, SourceExtensionDProject),
+        GetUnitOutputPath('', Target, DelphiPersonality, False), Target.VersionNumber);
   end;
 
   function CompileAndInstall(const IncludePath: String): Boolean;
-
   begin
     Result := True;
     CleanPackagesCache;
@@ -1682,7 +1687,7 @@ var
       ShowStatusMsg('Modifying package ' + ExtractFileName(PackageFileNameRun));
       ChangeDCUOutputDir(PackageFileNameRun);
       ShowStatusMsg(Format('Compiling package %s (%s)',
-        [ExtractFileName(PackageFileNameRun), GetPlatformName(bpWin32)]));
+        [ExtractFileName(PackageFileNameRun), GetPlatformName(LPlatform)]));
       Result := Target.CompilePackage(PackageFileNameRun,
           BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options);
       if not Result then
@@ -1696,13 +1701,13 @@ var
       begin
         CEDetected := True;
         ShowStatusMsg(Format('Copying Community Edition package %s (%s)',
-          [ExtractFileName(PackageFileNameRun), GetPlatformName(bpWin32)]));
-        Result := CopyPackageLibsD(PackageFileNameRun, Target, bpWin32);
+          [ExtractFileName(PackageFileNameRun), GetPlatformName(LPlatform)]));
+        Result := CopyPackageLibsD(PackageFileNameRun, Target, LPlatform);
         if not Result and not NoCE then
         begin
           CEFailed := True;
           AddLogAndUninstall(PackageFileNameRun,
-            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(bpWin32)]));
+            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(LPlatform)]));
         end;
       end;
       if Result and IsCBProjPackage(PackageFileNameRun) then
@@ -1717,7 +1722,7 @@ var
       ChangeDCUOutputDir(PackageFileNameDsgn);
       ShowStatusMsg('Installing package ' + ExtractFileName(PackageFileNameDsgn));
       Result := Target.InstallPackage(PackageFileNameDsgn,
-        BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options);
+        BplPath, DcpPath, HppPath, IncludePath, LibPaths, Options, LPlatform);
       if not Result then
         AddLogAndUninstall(PackageFileNameDsgn, Target.DCC.Output);
       if Result and not IsCBProjPackage(PackageFileNameDsgn) and
@@ -1729,16 +1734,17 @@ var
       begin
         CEDetected := True;
         ShowStatusMsg(Format('Copying Community Edition package %s (%s)',
-          [ExtractFileName(PackageFileNameDsgn), GetPlatformName(bpWin32)]));
-        Result := CopyPackageLibsD(PackageFileNameDsgn, Target, bpWin32);
+          [ExtractFileName(PackageFileNameDsgn), GetPlatformName(LPlatform)]));
+        Result := CopyPackageLibsD(PackageFileNameDsgn, Target, LPlatform);
         if not Result and not NoCE then
         begin
           AddLogAndUninstall(PackageFileNameRun,
-            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(bpWin32)]));
+            Format('Error while copying precompiled library files for Community Edition (%s)', [GetPlatformName(LPlatform)]));
           CEFailed := True;
         end;
         ShowStatusMsg('Registering package ' + ExtractFileName(PackageFileNameDsgn));
-        Result := Target.RegisterPackage(BinaryFileName(BplPath, PackageFileNameDsgn), Format(Descr, [Target.Name]));
+        Result := Target.RegisterPackage(BinaryFileName(BplPath, PackageFileNameDsgn),
+          Format(Descr, [Target.Name]), LPlatform);
         if not Result then
           AddLogAndUninstall(PackageFileNameDsgn, 'Error registering package')
       end;
@@ -1770,7 +1776,7 @@ var
       ShowStatusMsg('Installing package ' + ExtractFileName(PackageFileNameDsgn));
       Target.Make.Output := '';
       Result := Target.InstallPackage(PackageFileNameDsgn,
-        BplPath, DcpPath, HppPath, LibPaths, '', '');
+        BplPath, DcpPath, HppPath, LibPaths, '', '', LPlatform);
       if not Result then
         AddLogAndUninstall(PackageFileNameDsgn, Target.Make.Output)
     end;
@@ -1797,11 +1803,14 @@ var
     begin
       ShowStatusMsg('Registering package ' + ExtractFileName(PackageFileNameDsgn));
       Result := Target.RegisterPackage(BinaryFileName(BplPath, PackageFileNameDsgn),
-        Format(Descr, [Target.Name]));
+        Format(Descr, [Target.Name]), LPlatform);
       if not Result then
         AddLogAndUninstall(PackageFileNameDsgn, 'Error registering package')
     end;
   end;
+
+var
+  DCURenamed: Boolean;
 
 begin
   if Config.NoCompile then
@@ -1809,29 +1818,50 @@ begin
     Result := True;
     exit;
   end;
+  DCURenamed := False;
   try
     ShowStatusMsg(Format('Preparing compilation of package %s (%s)',
-      [ExtractFileName(PackageFileNameRun), GetPlatformName(bpWin32)]));
+      [ExtractFileName(PackageFileNameRun), GetPlatformName(LPlatform)]));
 
-    Target.DCC := Target.DCC32;
+    if Personality in [bpDelphi32, bpBCBuilder32] then
+    begin
+      LPlatform := bpWin32;
+      DelphiPersonality := bpDelphi32;
+      Target.DCC := Target.DCC32;
+      DcpPath := GetDcpPath(Target);
+      BplPath := GetBplPath(Target);
+    end
+    else
+    begin
+      LPlatform := bpWin64;
+      DelphiPersonality := bpDelphi64;
+      Target.DCC := (Target as TJclBDSInstallation).DCC64;
+      DcpPath := GetDcp64Path(Target);
+      BplPath := GetBpl64Path(Target);
+    end;
+
     SpecialDsgnPackage := PackageFileNameRun <> PackageFileNameDsgn;
     SrcPath := ExtractFilePath(PackageFileNameRun);
     HppPath := GetHPPPath(SrcPath, Target, Personality, Trial);
     ObjPath := GetObjPath(HppPath, Target, Personality);
-    DcpPath := GetDcpPath(Target);
-    BplPath := GetBplPath(Target);
     ForceDirectories(PathRemoveSeparator(DcpPath));
     ForceDirectories(PathRemoveSeparator(BplPath));
-    LibPaths := Target.LibrarySearchPath[bpWin32];
+    LibPaths := Target.LibrarySearchPath[LPlatform];
 
-    if not FPathToSrcWin32 then
+    if not FPathToSrcWin32 or (LPlatform = bpWin64) then
     begin
       UnitPath := PathRemoveSeparator
         (GetUnitOutputPath(ExtractFilePath(PackageFileNameRun), Target,
-        bpDelphi32, Trial));
+        DelphiPersonality, Trial));
       ForceDirectories(UnitPath);
-      CopyToUnitOutputPath(PackageFileNameRun, Target, bpDelphi32, Trial);
-      DoDeleteDCU(ExtractFilePath(PackageFileNameRun));
+      CopyToUnitOutputPath(PackageFileNameRun, Target, DelphiPersonality, Trial);
+      if LPlatform = bpWin32 then
+        DoDeleteDCU(ExtractFilePath(PackageFileNameRun))
+      else
+      begin
+        RenameAllFiles(ExtractFilePath(PackageFileNameRun), '*.dcu', '._dcu');
+        DCURenamed := True;
+      end;
       Options := '-U' + AnsiQuotedStr(UnitPath, '"');
       if not Trial then
       begin
@@ -1855,9 +1885,8 @@ begin
     //Application.MessageBox(PChar(LibPaths), nil, 0);
     ExpandEnvironmentVarCustom(LibPaths, Target.EnvironmentVariables);
     if ((Target is TJclBDSInstallation) and Dual) or
-      (IsCBProjPackage(PackageFileNameRun) and
-      (bpBCBuilder32 in Target.Personalities)) or
-      (IsBCBPackage(PackageFileNameRun) and (bpBCBuilder32 in Target.Personalities))
+      (IsCBProjPackage(PackageFileNameRun) and (bpBCBuilder32 in Target.Personalities)) or
+      (IsBCBPackage(PackageFileNameRun)    and (bpBCBuilder32 in Target.Personalities))
     then
     begin
       ForceDirectories(PathRemoveSeparator(HppPath));
@@ -1867,7 +1896,7 @@ begin
     else
       TJclBDSInstallation(Target).DualPackageInstallation := False;
     if IsDelphiPackage(PackageFileNameRun) and
-      (bpDelphi32 in Target.Personalities) then
+      (DelphiPersonality in Target.Personalities) then
       Result := CompileAndInstall(IncludePath)
     else if IsCBProjPackage(PackageFileNameRun) and
       (bpBCBuilder32 in Target.Personalities) then
@@ -1903,7 +1932,8 @@ begin
       Result := False;
     end;
   end;
-
+  if DCURenamed then
+    RenameAllFiles(ExtractFilePath(PackageFileNameRun), '*._dcu', '.dcu');
 end;
 
 function TfrmMain.AddDirToUnitsInPackage(const PackageFileName: String;
@@ -1972,7 +2002,9 @@ var
     ShowStatusMsg(Format('Uninstalling package %s (%s)',
       [ExtractFileName(PackageFileName), GetPlatformName(APlatform)]));
     Target.UninstallPackage(ChangeFileExt(PackageFileName, SourceExtensionDelphiPackage),
-      BplPath, DcpPath, APlatform);
+      BplPath, DcpPath, APlatform, bpWin32);
+      // Last parameter = bpWin32 because we do not call this function
+      // for Win64 packages if 64-bit IDE exists
   end;
   {............................................................................}
   procedure PreparePaths;
@@ -2014,7 +2046,7 @@ begin
       ForceDirectories(UnitPath);
       CopyToUnitOutputPath(PackageFileName, Target, Personality, Trial);
       (Target as TJclBDSInstallation).CleanPackageCache
-        (BinaryFileName(BplPath, PackageFileName));
+        (BinaryFileName(BplPath, PackageFileName), APlatform);
       RenameAllFiles(ExtractFilePath(PackageFileName), '*.dcu', '._dcu');
       try
         Options := '-U' + AnsiQuotedStr(UnitPath, '"');
@@ -2599,14 +2631,20 @@ var
     if bpDelphi32 in Target.Personalities then
     begin
       PkgName := GetPkgFile(Path, Pkg, Suffix, Target, bpDelphi32, False);
-      Target.UninstallPackage(PkgName, GetBplPath(Target), GetDcpPath(Target), bpWin32);
+      Target.UninstallPackage(PkgName, GetBplPath(Target), GetDcpPath(Target), bpWin32, bpWin32);
     end;
     if bpBCBuilder32 in Target.Personalities then
     begin
       PkgName := GetPkgFile(Path, Pkg, Suffix, Target, bpBCBuilder32, False);
       Target.UninstallPackage(MakeUninstallName(PkgName), GetBplPath(Target),
-        GetDcpPath(Target), bpWin32);
+        GetDcpPath(Target), bpWin32, bpWin32);
     end;
+    if clBds64 in Target.CommandLineTools then
+    begin
+      PkgName := GetPkgFile(Path, Pkg, Suffix, Target, bpDelphi64, False);
+      Target.UninstallPackage(PkgName, GetBplPath(Target), GetDcpPath(Target), bpWin64, bpWin64);
+    end;
+
   end;
   {............................................................................}
   procedure UninstallDepPackages(Target: TJclBorRADToolInstallation);
@@ -2908,7 +2946,8 @@ begin
         txtLog.Lines.Add('=== ' + Target.Name + ' ===');
         txtLog.Lines.Add('Preparing...');
         ShowStatusMsg('Adjusting for versions of third-party packages');
-        FReplacements.Execute(Target, FPaths, FPackages, Config.SourcePath, Config.CBuilder
+        FReplacements.Execute(Target, FPaths, FPackages, Config.SourcePath, Config.CBuilder,
+        bpWin32
           {$IFDEF LOGPKGREPLACE}, ErrorLog{$ENDIF});
         if (Target.RadToolKind = brBorlandDevStudio) and
           (Target.VersionNumber in HelpBDSVer) then
@@ -3019,41 +3058,51 @@ begin
                 Ok := InstallPackage(PkgNameRun, PkgNameDsgn, FDescr[j],
                   FullIncludePaths[ipWin32], Target, Personality32, Dual, IsTrial[j], IsOptional[j], IsRuntime[j], NoCE[j]);
                 Application.ProcessMessages; if Aborted then exit;
-                if Ok and not Is32Bit[j] then
+                if Ok and not Is32Bit[j] and not Config.CBuilder then
                 begin
                   // Win64
+                  PkgNameRun := GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, Personality64, IsTrial[j], False);
+                  PkgNameDsgn := GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, Personality64, IsTrial[j], True);
                   if IsTrial[j] then
-                    AdjustPathToUnitsInPackage(
-                      GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, Personality64, True),
-                      Target, bpDelphi64);
+                  begin
+                    AdjustPathToUnitsInPackage(PkgNameRun, Target, bpDelphi64);
+                    if clBds64 in Target.CommandLineTools then
+                      AdjustPathToUnitsInPackage(PkgNameDsgn, Target, bpDelphi64);
+                  end;
                   try
-                    CompileRuntime(
-                      GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, Personality64, IsTrial[j]),
-                      FDescr[j], FullIncludePaths[ipWin64], Target, Personality64, bpWin64,
-                      Dual64, IsTrial[j], IsOptional[j], NoCE[j])
+                    if clBds64 in Target.CommandLineTools then
+                      InstallPackage(PkgNameRun, PkgNameDsgn, FDescr[j],
+                        FullIncludePaths[ipWin64], Target, Personality64, Dual, IsTrial[j], IsOptional[j], IsRuntime[j], NoCE[j])
+                    else
+                      CompileRuntime(PkgNameRun,
+                        FDescr[j], FullIncludePaths[ipWin64], Target, Personality64, bpWin64,
+                        Dual64, IsTrial[j], IsOptional[j], NoCE[j])
                   finally
                     if IsTrial[j] then
-                      AdjustPathToUnitsInPackageBack(GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j],
-                        Target, Personality64, True), Target, bpDelphi64);
+                    begin
+                      AdjustPathToUnitsInPackageBack(PkgNameRun, Target, bpDelphi64);
+                      if clBds64 in Target.CommandLineTools then
+                        AdjustPathToUnitsInPackageBack(PkgNameDsgn, Target, bpDelphi64);
+                    end;
                   end;
                   Application.ProcessMessages; if Aborted then exit;
                   for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
                     if (IP in PkgInstallPlatforms[j]) and CanInstallInTarget(IP, Target) then
                     begin
-                      // OSX64, OSXArm64, Android32, Android64, Linux64, iOS64, iOSSim64
+                      // Win64x, OSX64, OSXArm64, Android32, Android64, Linux64, iOS64, iOSSim64
                       if IsTrial[j] then
                         AdjustPathToUnitsInPackage(
-                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True),
+                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True, False),
                             Target, GetDelphiPersonalityForInstallPlatform(IP));
                       try
                         CompileRuntime(
-                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), IsTrial[j]),
+                          GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), IsTrial[j], False),
                           FDescr[j], FullIncludePaths[IP], Target, GetDelphiPersonalityForInstallPlatform(IP),
                           GetPlatformForInstallPlatform(IP), Dual64, IsTrial[j], IsOptional[j], NoCE[j])
                       finally
                         if IsTrial[j] then
                           AdjustPathToUnitsInPackageBack(
-                            GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True),
+                            GetPkgFile64(Config.SourcePath + FPaths[j], FPackages[j], Target, GetDelphiPersonalityForInstallPlatform(IP), True, False),
                             Target, GetDelphiPersonalityForInstallPlatform(IP));
                       end;
                       Application.ProcessMessages; if Aborted then exit;
@@ -3067,7 +3116,10 @@ begin
               Ok := False;
             end;
             if Ok then
-              AddToLastLogLine(' Installed.')
+              if IsRunTime[j] then
+                AddToLastLogLine(' Compiled.')
+              else
+                AddToLastLogLine(' Installed.')
             else
             begin
               if IsOptional[j] or (NoCE[j] and (Target.VersionNumber = BDSCommunityEditionVer)) then
@@ -3208,26 +3260,32 @@ var
     if DPkgNameRun <> DPkgNameDsgn then
     begin
       ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(DPkgNameRun), GetPlatformName(bpWin32)]));
-      ATarget.UninstallPackage(DPkgNameRun, GetBplPath(ATarget), GetDcpPath(ATarget), bpWin32);
+      ATarget.UninstallPackage(DPkgNameRun, GetBplPath(ATarget), GetDcpPath(ATarget), bpWin32, bpWin32);
     end;
     if FileExists(DPkgNameDsgn) then
     begin
       ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(DPkgNameDsgn), GetPlatformName(bpWin32)]));
-      Result := ATarget.UninstallPackage(DPkgNameDsgn, GetBplPath(ATarget), GetDcpPath(ATarget), bpWin32);
+      Result := ATarget.UninstallPackage(DPkgNameDsgn, GetBplPath(ATarget), GetDcpPath(ATarget), bpWin32, bpWin32);
     end;
     if (bpDelphi64 in ATarget.Personalities) and (ipWin64 in Config.InstallPlatforms) then
     begin
-      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphi64, AIsTrial);
+      s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, bpDelphi64, AIsTrial, False);
       ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(bpWin64)]));
-      ATarget.UninstallPackage(s, GetBpl64Path(ATarget), GetDcp64Path(ATarget), bpWin64);
+      ATarget.UninstallPackage(s, GetBpl64Path(ATarget), GetDcp64Path(ATarget), bpWin64, bpWin32);
+      if (clBds64 in Target.CommandLineTools) and FileExists(DPkgNameDsgn) and
+        (DPkgNameRun <> DPkgNameDsgn) then
+      begin
+        ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(DPkgNameDsgn), GetPlatformName(bpWin64)]));
+        ATarget.UninstallPackage(DPkgNameDsgn, GetBpl64Path(ATarget), GetDcp64Path(ATarget), bpWin64, bpWin64);
+      end;
     end;
     for IP := FirstNonWinInstallPlatform to High(TInstallPlatform) do
       if Config.CanInstallIn(ATarget, IP) then
       begin
         BDSP := GetPlatformForInstallPlatform(IP);
-        s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, GetDelphiPersonalityForInstallPlatform(IP), AIsTrial);
+        s := GetPkgFile64(Config.SourcePath + APath, APackage, ATarget, GetDelphiPersonalityForInstallPlatform(IP), AIsTrial, False);
         ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(s), GetPlatformName(BDSP)]));
-        ATarget.UninstallPackage(s, GetBplPathEx(ATarget, BDSP), GetDcpPathEx(ATarget, BDSP), BDSP);
+        ATarget.UninstallPackage(s, GetBplPathEx(ATarget, BDSP), GetDcpPathEx(ATarget, BDSP), BDSP, bpWin32);
       end;
   end;
   {............................................................................}
@@ -3501,11 +3559,11 @@ var
             if CBPkgNameRun <> CBPkgNameDsgn then
             begin
               ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(CBPkgNameRun), GetPlatformName(bpWin32)]));
-              Target.UninstallPackage(CBPkgNameRun, GetBplPath(Target), GetDcpPath(Target), bpWin32);
+              Target.UninstallPackage(CBPkgNameRun, GetBplPath(Target), GetDcpPath(Target), bpWin32, bpWin32);
             end;
             ShowStatusMsg(Format('Uninstalling %s (%s)', [ExtractFileName(CBPkgNameDsgn), GetPlatformName(bpWin32)]));
             Ok := Target.UninstallPackage(MakeUninstallName(CBPkgNameDsgn),
-              GetBplPath(Target), GetDcpPath(Target), bpWin32);
+              GetBplPath(Target), GetDcpPath(Target), bpWin32, bpWin32);
             if (CBPath <> CBPrevPath) then
             begin
               ShowStatusMsg('Cleaning library paths');

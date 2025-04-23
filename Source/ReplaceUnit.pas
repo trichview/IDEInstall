@@ -20,12 +20,14 @@ type
     function GetItem(Index: Integer): TReplaceItem;
     procedure SetItem(Index: Integer; const Value: TReplaceItem);
     function GetValue(Index: Integer; Target: TJclBorRADToolInstallation;
+      APlatform: TJclBDSPlatform;
       out Res: String
       {$IFDEF LOGPKGREPLACE}; var Log: String{$ENDIF}): Boolean;
   public
     constructor Create;
     procedure Execute(Target: TJclBorRADToolInstallation;
-      Paths, Packages: TStrings; const BasePath: String; CBuilder: Boolean
+      Paths, Packages: TStrings; const BasePath: String; CBuilder: Boolean;
+      APlatform: TJclBDSPlatform
       {$IFDEF LOGPKGREPLACE}; var Log: String{$ENDIF});
     property Items[Index: Integer]: TReplaceItem read GetItem write SetItem;
   end;
@@ -72,7 +74,8 @@ begin
 end;
 
 procedure TReplaceCollection.Execute(Target: TJclBorRADToolInstallation;
-  Paths, Packages: TStrings; const BasePath: String; CBuilder: Boolean
+  Paths, Packages: TStrings; const BasePath: String; CBuilder: Boolean;
+  APlatform: TJclBDSPlatform
   {$IFDEF LOGPKGREPLACE}; var Log: String{$ENDIF});
 var
   i: Integer;
@@ -82,7 +85,7 @@ var
 begin
   for i := 0 to Count - 1 do
   begin
-    if not GetValue(i, Target, ValW {$IFDEF LOGPKGREPLACE}, Log{$ENDIF}) then
+    if not GetValue(i, Target, APlatform, ValW {$IFDEF LOGPKGREPLACE}, Log{$ENDIF}) then
       continue;
     Val := AnsiString(ValW);
     Path := BasePath + Paths[Items[i].Package - 1];
@@ -106,7 +109,7 @@ begin
       end;
       if bpDelphi64 in Target.Personalities then
       begin
-        PkgName := frmMain.GetPkgFile64(Path, Pkg, Target, bpDelphi64, False);
+        PkgName := frmMain.GetPkgFile64(Path, Pkg, Target, bpDelphi64, False, False);
         ReplaceInFile(PkgName, ID, Val, False);
         PkgName := ChangeFileExt(PkgName, SourceExtensionDProject);
         if FileExists(PkgName) then
@@ -141,7 +144,7 @@ begin
 end;
 
 function TReplaceCollection.GetValue(Index: Integer;
-  Target: TJclBorRADToolInstallation; out Res: String
+  Target: TJclBorRADToolInstallation; APlatform: TJclBDSPlatform; out Res: String
   {$IFDEF LOGPKGREPLACE}; var Log: String{$ENDIF}): Boolean;
 var
   PrefixLen, PostfixLen, i, p, j: Integer;
@@ -154,13 +157,13 @@ begin
   Log := Log + #13#10 + 'Searching for the package started from ' + Items[Index].Prefix +':';
   {$ENDIF}
 
-  for i := 0 to Target.IdePackages.Count - 1 do
-    if not Target.IdePackages.PackageDisabled[i] then
+  for i := 0 to Target.GetIdePackages(APlatform).Count - 1 do
+    if not Target.GetIdePackages(APlatform).PackageDisabled[i] then
     begin
        {$IFDEF LOGPKGREPLACE}
        Log := Log + #13#10 + ' - ' + Target.IdePackages.PackageFileNames[i];
        {$ENDIF}
-       Package := AnsiLowerCase(ExtractFileName(Target.IdePackages.PackageFileNames[i]));
+       Package := AnsiLowerCase(ExtractFileName(Target.GetIdePackages(APlatform).PackageFileNames[i]));
        if Copy(Package, 1, PrefixLen) = Items[Index].Prefix then
        begin
          if Items[Index].Length > 0 then
