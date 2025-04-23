@@ -17,6 +17,7 @@ Supported version of C++Builder: from 6 to  12 Athens.
 Exception: C++Builder-only packages for BDS 2006 are not supported.
 
 Supported platforms: Windows (32-bit and 64-bit), macOS (64-bit Intel and ARM), Android (32-bit and 64-bit), iOS 64-bit, iOS 64-bit Simulator, Linux.
+
 Supported IDE: 32-bit and 64-bit
 
 ## Features
